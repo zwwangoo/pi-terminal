@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="pi-plugin-chrome" content="v3" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' file:; style-src 'self' file: 'unsafe-inline'; img-src 'self' file: data:; font-src 'self' file:; connect-src 'none';" />
+    <title>Terminal</title>
+    <link rel="stylesheet" href="xterm.css" />
+    <link rel="stylesheet" href="panel.css" />
+  </head>
+  <body>
+    <div class="app">
+      <header class="bar">
+        <div id="tabs" class="tabs"><button id="add" class="add" type="button" aria-label="New terminal" title="New terminal (⌘T)">+</button></div>
+      </header>
+      <main id="terms" class="terms">
+        <button id="float-add" class="float-add" type="button" aria-label="New terminal" title="New terminal (⌘T)">+</button>
+        <div id="status" class="status" role="status"></div>
+      </main>
+    </div>
+    <script src="./xterm.js"></script>
+    <script src="./addon-fit.js"></script>
+    <script src="./addon-web-links.js"></script>
+    <script src="./panel.js"></script>
+  </body>
+</html>

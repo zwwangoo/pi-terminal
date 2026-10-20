@@ -1,0 +1,26 @@
+:root { color-scheme: light dark; --bg: #fbfbfc; --fg: #24292f; --bar: #f1f2f4; --line: #dcdfe4; --on: #ffffff; }
+@media (prefers-color-scheme: dark) { :root { --bg: #1e1f24; --fg: #d8dae0; --bar: #17181c; --line: #2c2e35; --on: #1e1f24; } }
+html, body { height: 100%; margin: 0; background: var(--bg); color: var(--fg); font: 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; overflow: hidden; }
+.app { display: flex; flex-direction: column; height: calc(100dvh - var(--pi-plugin-titlebar-height, 0px)); }
+.bar { display: flex; align-items: center; background: var(--bar); border-bottom: 1px solid var(--line); min-height: 32px; }
+.tabs { display: flex; flex: 1; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+.tab { display: flex; align-items: center; gap: 8px; padding: 0 10px; height: 32px; border: 0; border-right: 1px solid var(--line); background: transparent; color: inherit; opacity: .6; cursor: pointer; font: inherit; max-width: 180px; white-space: nowrap; }
+.tab.on { opacity: 1; background: var(--on); }
+.tab.dead span:first-child { text-decoration: line-through; }
+.tab .x { opacity: .5; font-size: 14px; line-height: 1; }
+.tab .x:hover { opacity: 1; }
+.add { height: 32px; width: 32px; border: 0; background: transparent; color: inherit; font-size: 16px; cursor: pointer; opacity: .7; }
+.add:hover { opacity: 1; }
+/* One session: the bar is hidden (the host header already carries the "Terminal" tab, the prompt shows the cwd). */
+.app.single .bar { display: none; }
+.float-add { display: none; position: absolute; top: 4px; right: 8px; z-index: 5; width: 24px; height: 24px; border: 0; border-radius: 6px; background: var(--bar); color: inherit; font-size: 16px; line-height: 24px; padding: 0; cursor: pointer; opacity: 0; transition: opacity .12s; }
+.app.single .float-add { display: block; }
+.app.single .terms:hover .float-add, .float-add:focus-visible { opacity: .75; }
+.app.single .float-add:hover { opacity: 1; }
+.status { position: absolute; left: 8px; right: 8px; bottom: 6px; z-index: 5; padding: 4px 8px; border-radius: 6px; background: var(--bar); color: #d9534f; pointer-events: none; }
+.status:empty { display: none; }
+.terms { position: relative; flex: 1; min-height: 0; padding: 6px 0 4px 8px; background: var(--bg); }
+.term { position: absolute; inset: 6px 0 4px 8px; display: none; }
+.term.on { display: block; }
+.term .xterm { height: 100%; }
+.term .xterm-viewport { background: transparent !important; }

@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "id": "local.terminal",
+  "name": "Terminal",
+  "version": "0.1.3",
+  "description": "Embedded interactive terminal (xterm.js + PTY) for the work panel. Opens a login shell in the current workspace.",
+  "author": "local",
+  "license": "MIT",
+  "main": "main.js",
+  "engines": { "piDesktop": ">=0.17.0" },
+  "activationEvents": ["onStartup"],
+  "permissions": ["ui.view"],
+  "contributes": {
+    "views": [
+      {
+        "id": "terminal",
+        "title": { "en": "Terminal", "zh-CN": "终端" },
+        "icon": "terminal",
+        "entry": "views/index.html",
+        "order": 30
+      }
+    ]
+  },
+  "safetyNotes": "Starts an interactive login shell (your $SHELL) inside a PTY via a bundled python3 relay (spawned with an argument array, no shell string). The shell has the same OS rights as you; commands you type run unrestricted. The plugin sends no network requests, reads no credentials and writes no files. The panel is a context-isolated work-panel view that talks to the plugin process only through the host bridge (term.* channels). Requires python3 on PATH (macOS ships one)."
+}
