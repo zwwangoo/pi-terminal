@@ -31,11 +31,33 @@
   function setStatus(msg) {
     statusEl.textContent = msg || "";
   }
+  // Palette follows the host: same base colors as the built-in panels, switched by the app's own light/dark setting.
+  var THEMES = {
+    dark: {
+      background: "#181818", foreground: "#d4d4d4", cursor: "#ffffff", cursorAccent: "#181818",
+      selectionBackground: "rgba(255,255,255,0.18)",
+    },
+    light: {
+      background: "#fafafa", foreground: "#1a1c1f", cursor: "#1a1c1f", cursorAccent: "#fafafa",
+      selectionBackground: "rgba(0,0,0,0.15)",
+      black: "#1a1c1f", red: "#c4352b", green: "#1f7a3d", yellow: "#8a6a00",
+      blue: "#1d5fbf", magenta: "#9b3fa8", cyan: "#0f7c8a", white: "#5d5d5d",
+      brightBlack: "#6b6b6b", brightRed: "#d9453a", brightGreen: "#2a9650", brightYellow: "#a07d00",
+      brightBlue: "#2f74da", brightMagenta: "#b44fc2", brightCyan: "#1796a6", brightWhite: "#3a3a3a",
+    },
+  };
+  var base = "dark";
   function themeObj() {
-    var dark = !window.matchMedia || window.matchMedia("(prefers-color-scheme: dark)").matches;
-    return dark
-      ? { background: "#1e1f24", foreground: "#d8dae0", cursor: "#e5e9f0", selectionBackground: "#3b4252" }
-      : { background: "#fbfbfc", foreground: "#24292f", cursor: "#24292f", selectionBackground: "#cfd8e6" };
+    return THEMES[base];
+  }
+  function applyAppearance(a) {
+    var b = a && a.base;
+    if (b !== "light" && b !== "dark") {
+      b = window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+    }
+    base = b;
+    document.documentElement.dataset.base = b;
+    tabs.forEach(function (t) { t.term.options.theme = THEMES[b]; });
   }
 
   function updateChrome() {
@@ -246,6 +268,11 @@
   document.addEventListener("click", function () { if (active) active.term.focus(); });
   setInterval(checkWorkspace, 1500);
 
-  if (!bridge || !bridge.invoke) setStatus("pluginBridge unavailable");
-  else restore();
+  if (!bridge || !bridge.invoke) { setStatus("pluginBridge unavailable"); }
+  else {
+    applyAppearance(null);
+    if (bridge.on) bridge.on("appearance:changed", applyAppearance);
+    invoke("app.getAppearance").then(applyAppearance).catch(function () {});
+    restore();
+  }
 })();

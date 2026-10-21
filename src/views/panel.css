@@ -1,5 +1,5 @@
-:root { color-scheme: light dark; --bg: #fbfbfc; --fg: #24292f; --bar: #f1f2f4; --line: #dcdfe4; --on: #ffffff; }
-@media (prefers-color-scheme: dark) { :root { --bg: #1e1f24; --fg: #d8dae0; --bar: #17181c; --line: #2c2e35; --on: #1e1f24; } }
+:root { color-scheme: dark; --bg: #181818; --fg: #d4d4d4; --bar: #131313; --line: rgba(255, 255, 255, 0.08); --on: var(--bg); }
+:root[data-base="light"] { color-scheme: light; --bg: #fafafa; --fg: #1a1c1f; --bar: #f0f0f0; --line: rgba(0, 0, 0, 0.08); --on: var(--bg); }
 html, body { height: 100%; margin: 0; background: var(--bg); color: var(--fg); font: 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; overflow: hidden; }
 .app { display: flex; flex-direction: column; height: calc(100dvh - var(--pi-plugin-titlebar-height, 0px)); }
 .bar { display: flex; align-items: center; background: var(--bar); border-bottom: 1px solid var(--line); min-height: 32px; }
