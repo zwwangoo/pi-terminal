@@ -101,20 +101,25 @@ async function readUntil(id, re, ms = 8000) {
   const e = await readUntil(o.id, /$never^/, 5000);
   check("exit reported", e.exited && e.exited.exited === true, JSON.stringify(e.exited && { code: e.exited.exitCode }));
 
-  // per-project isolation: sessions are tagged with their project, term.list reports the caller's project
+  // per-project isolation: a session is tagged with the project it was opened in, and term.list reports
+  // the project the host currently has open (the panel and this process read that same value).
   const wsA = { path: "/tmp", projectId: "projA" };
   const wsB = { path: "/usr", projectId: "projB" };
-  const pa = await inv("term.open", { cols: 80, rows: 24, ws: wsA });
-  const pb = await inv("term.open", { cols: 80, rows: 24, ws: wsB });
+  global.pi.workspace.get = async () => wsA;
+  const pa = await inv("term.open", { cols: 80, rows: 24 });
+  global.pi.workspace.get = async () => wsB;
+  const pb = await inv("term.open", { cols: 80, rows: 24 });
   check("open tags session with project key", pa.key === "p:projA" && pb.key === "p:projB", `${pa.key} ${pb.key}`);
   check("session cwd follows its project", pa.cwd === "/tmp" && pb.cwd === "/usr");
-  const la = await inv("term.list", { ws: wsA });
-  const lb = await inv("term.list", { ws: wsB });
   const idsFor = (l) => l.sessions.filter((s) => s.key === l.key).map((s) => s.id);
-  check("list in project A sees only A's session", la.key === "p:projA" && idsFor(la).length === 1 && idsFor(la)[0] === pa.id, JSON.stringify(idsFor(la)));
-  check("list in project B sees only B's session", lb.key === "p:projB" && idsFor(lb).length === 1 && idsFor(lb)[0] === pb.id, JSON.stringify(idsFor(lb)));
+  const lb = await inv("term.list");
+  check("list sees only the open project's session", lb.key === "p:projB" && idsFor(lb).length === 1 && idsFor(lb)[0] === pb.id, JSON.stringify(idsFor(lb)));
+  global.pi.workspace.get = async () => wsA;
+  const la = await inv("term.list");
+  check("switching the host project switches the list", la.key === "p:projA" && idsFor(la).length === 1 && idsFor(la)[0] === pa.id, JSON.stringify(idsFor(la)));
+  global.pi.workspace.get = async () => ({ path: process.argv[2] || process.env.HOME });
   const lh = await inv("term.list");
-  check("without hint falls back to host workspace key", lh.key === "r:" + (process.argv[2] || process.env.HOME), lh.key);
+  check("key follows the host workspace", lh.key === "r:" + (process.argv[2] || process.env.HOME), lh.key);
   await inv("term.close", { id: pa.id });
   await inv("term.close", { id: pb.id });
 

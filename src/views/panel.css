@@ -1,11 +1,11 @@
-:root { color-scheme: dark; --bg: #181818; --fg: #d4d4d4; --bar: #131313; --line: rgba(255, 255, 255, 0.08); --on: var(--bg); }
-:root[data-base="light"] { color-scheme: light; --bg: #fafafa; --fg: #1a1c1f; --bar: #f0f0f0; --line: rgba(0, 0, 0, 0.08); --on: var(--bg); }
+:root { color-scheme: dark; --bg: #181818; --fg: #d4d4d4; --bar: #131313; --line: rgba(255, 255, 255, 0.08); }
+:root[data-base="light"] { color-scheme: light; --bg: #fafafa; --fg: #1a1c1f; --bar: #f0f0f0; --line: rgba(0, 0, 0, 0.08); }
 html, body { height: 100%; margin: 0; background: var(--bg); color: var(--fg); font: 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; overflow: hidden; }
 .app { display: flex; flex-direction: column; height: calc(100dvh - var(--pi-plugin-titlebar-height, 0px)); }
 .bar { display: flex; align-items: center; background: var(--bar); border-bottom: 1px solid var(--line); min-height: 32px; }
 .tabs { display: flex; flex: 1; min-width: 0; overflow-x: auto; scrollbar-width: none; }
 .tab { display: flex; align-items: center; gap: 8px; padding: 0 10px; height: 32px; border: 0; border-right: 1px solid var(--line); background: transparent; color: inherit; opacity: .6; cursor: pointer; font: inherit; max-width: 180px; white-space: nowrap; }
-.tab.on { opacity: 1; background: var(--on); }
+.tab.on { opacity: 1; background: var(--bg); }
 .tab.dead span:first-child { text-decoration: line-through; }
 .tab .x { opacity: .5; font-size: 14px; line-height: 1; }
 .tab .x:hover { opacity: 1; }

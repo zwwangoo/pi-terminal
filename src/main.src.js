@@ -29,9 +29,9 @@ function wsKey(ws) {
   return "r:" + ((ws && ws.path) || "");
 }
 
-// The panel may pass the workspace it is showing (p.ws); otherwise use the host's current one.
-async function currentWorkspace(hint) {
-  if (hint && typeof hint.path === "string" && hint.path) return { cwd: hint.path, key: wsKey(hint) };
+// Sessions belong to the host's current workspace: the panel and this process read the same value,
+// so there is no per-call workspace hint to pass around.
+async function currentWorkspace() {
   try {
     const ws = await pi.workspace.get();
     if (ws && ws.path) return { cwd: ws.path, key: wsKey(ws) };
@@ -41,8 +41,8 @@ async function currentWorkspace(hint) {
   return { cwd: "", key: wsKey(null) };
 }
 
-async function openSession({ cols, rows, ws }) {
-  const { cwd, key } = await currentWorkspace(ws);
+async function openSession({ cols, rows }) {
+  const { cwd, key } = await currentWorkspace();
   const id = "t" + ++seq;
   const c = Math.max(2, Math.min(1000, cols | 0 || 80));
   const r = Math.max(2, Math.min(1000, rows | 0 || 24));
@@ -111,7 +111,7 @@ function drain(s) {
 }
 
 async function poll(s, gen) {
-  if (gen !== s.gen) return { data: "", more: false, exited: false, superseded: true };
+  if (gen !== s.gen) return { data: "", exited: false, superseded: true };
   if (!s.pending.length && !s.exited) {
     await new Promise((resolve) => {
       const t = setTimeout(done, POLL_HOLD_MS);
@@ -123,11 +123,10 @@ async function poll(s, gen) {
     });
   }
   // a newer attach (panel reload / second panel) took over this session while we were waiting
-  if (gen !== s.gen) return { data: "", more: false, exited: false, superseded: true };
+  if (gen !== s.gen) return { data: "", exited: false, superseded: true };
   const buf = drain(s);
   return {
     data: buf.toString("base64"),
-    more: s.pendingBytes > 0,
     exited: s.exited && s.pendingBytes === 0,
     exitCode: s.exitCode,
     error: s.exited ? s.err : "",
@@ -156,13 +155,13 @@ async function onPanelInvoke(channel, p) {
       s.pending = [];
       s.pendingBytes = 0;
       if (s.paused) { s.paused = false; s.proc.stdout.resume(); }
-      return { replay: s.ring.toString("base64"), cwd: s.cwd, exited: s.exited, gen: s.gen };
+      return { replay: s.ring.toString("base64"), gen: s.gen };
     }
     case "term.list": {
-      const cur = await currentWorkspace(p.ws);
+      const cur = await currentWorkspace();
       return {
         key: cur.key,
-        sessions: [...sessions.values()].map((s) => ({ id: s.id, cwd: s.cwd, key: s.key, exited: s.exited })),
+        sessions: [...sessions.values()].map((s) => ({ id: s.id, key: s.key, exited: s.exited })),
       };
     }
     case "term.write": {

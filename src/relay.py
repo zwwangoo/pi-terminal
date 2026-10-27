@@ -29,11 +29,8 @@ if pid == 0:
 
 
 def resize(c, r):
+    # TIOCSWINSZ also sends SIGWINCH to the pty's foreground process group; no manual kill needed.
     fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", r, c, 0, 0))
-    try:
-        os.kill(pid, signal.SIGWINCH)
-    except OSError:
-        pass
 
 
 resize(cols, rows)

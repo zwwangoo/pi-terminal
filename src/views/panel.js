@@ -4,23 +4,13 @@
   var tabsEl = document.getElementById("tabs");
   var hostEl = document.getElementById("terms");
   var statusEl = document.getElementById("status");
-  var tabs = []; // {id, gen, term, fit, el, btn, label, alive, pending, sending}
+  var tabs = []; // {id, gen, term, fit, el, btn, alive, pending, sending}
   var active = null;
   var curKey = null; // project key the visible tabs belong to (from the backend)
   var switching = false;
 
   function invoke(ch, p) {
     return bridge.invoke(ch, p || {});
-  }
-  // The workspace this panel is showing; backend falls back to the host's current one if unavailable.
-  async function getWs() {
-    try {
-      var w = await invoke("workspace.get");
-      if (w && typeof w.path === "string" && w.path) {
-        return { path: w.path, projectId: typeof w.projectId === "string" ? w.projectId : undefined };
-      }
-    } catch (e) {}
-    return null;
   }
   function b64ToBytes(s) {
     if (!s) return new Uint8Array(0);
@@ -47,9 +37,6 @@
     },
   };
   var base = "dark";
-  function themeObj() {
-    return THEMES[base];
-  }
   function applyAppearance(a) {
     var b = a && a.base;
     if (b !== "light" && b !== "dark") {
@@ -75,13 +62,18 @@
       cursorBlink: true,
       scrollback: 10000,
       allowProposedApi: true,
-      theme: themeObj(),
+      theme: THEMES[base],
     });
     var fit = new window.FitAddon.FitAddon();
     term.loadAddon(fit);
     if (window.WebLinksAddon) {
+      // Clicking an http(s) link hands the URL to the host bridge channel `shell.openExternal`,
+      // which the host gates on the manifest permission of the same name. A refusal is not silent:
+      // it lands on the status line instead of vanishing into an empty catch.
       term.loadAddon(new window.WebLinksAddon.WebLinksAddon(function (e, uri) {
-        invoke("shell.openExternal", { url: uri }).catch(function () {});
+        invoke("shell.openExternal", { url: uri }).catch(function (err) {
+          setStatus("Cannot open " + uri + ": " + ((err && err.message) || err || "unknown error"));
+        });
       }));
     }
     term.open(el);
@@ -98,7 +90,7 @@
     btn.appendChild(x);
     tabsEl.insertBefore(btn, document.getElementById("add"));
 
-    var t = { id: id, gen: gen | 0, term: term, fit: fit, el: el, btn: btn, label: label, alive: true, pending: "", sending: false };
+    var t = { id: id, gen: gen | 0, term: term, fit: fit, el: el, btn: btn, alive: true, pending: "", sending: false };
     tabs.push(t);
     btn.addEventListener("click", function (ev) {
       if (ev.target === x) closeTab(t); else activate(t);
@@ -110,17 +102,21 @@
     return t;
   }
 
-  // Coalesce keystrokes: one in-flight write per tab, the rest batched (keeps order, bounded latency).
-  function send(t, d) {
+  // One in-flight write per tab: keys that arrive mid-write are batched into the next one, so order is
+  // kept and a paste never starts N overlapping calls.
+  async function send(t, d) {
     t.pending += d;
     if (t.sending) return;
     t.sending = true;
-    (function pump() {
-      if (!t.pending) { t.sending = false; return; }
-      var chunk = t.pending;
-      t.pending = "";
-      invoke("term.write", { id: t.id, data: chunk }).catch(function () {}).then(pump);
-    })();
+    try {
+      while (t.pending) {
+        var chunk = t.pending;
+        t.pending = "";
+        await invoke("term.write", { id: t.id, data: chunk }).catch(function () {});
+      }
+    } finally {
+      t.sending = false;
+    }
   }
 
   function sendSize(t) {
@@ -181,8 +177,7 @@
   async function newTab() {
     var size = estimateSize();
     try {
-      var ws = await getWs();
-      var r = await invoke("term.open", { cols: size.cols, rows: size.rows, ws: ws });
+      var r = await invoke("term.open", { cols: size.cols, rows: size.rows });
       var t = makeTab(r.id, null, r.gen);
       activate(t);
       await new Promise(function (res) { requestAnimationFrame(res); });
@@ -227,7 +222,7 @@
   async function restore() {
     var live = [];
     try {
-      var l = await invoke("term.list", { ws: await getWs() });
+      var l = await invoke("term.list");
       curKey = l.key || null;
       live = l.sessions.filter(function (s) { return !s.exited && s.key === l.key; });
     } catch (e) {}
@@ -245,7 +240,7 @@
   async function checkWorkspace() {
     if (switching || document.visibilityState === "hidden") return;
     try {
-      var l = await invoke("term.list", { ws: await getWs() });
+      var l = await invoke("term.list");
       if (l.key === curKey) return;
     } catch (e) { return; }
     switching = true;
