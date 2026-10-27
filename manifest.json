@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "local.terminal",
   "name": "Terminal",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Embedded interactive terminal (xterm.js + PTY) for the work panel. Opens a login shell in the current workspace.",
   "author": "local",
   "license": "MIT",
@@ -19,7 +19,23 @@
         "entry": "views/index.html",
         "order": 30
       }
+    ],
+    "settings": [
+      {
+        "key": "imeAutoSwitch",
+        "title": "自动切换到英文输入法",
+        "description": "终端获得键盘焦点时切到英文输入法，离开时切回原来的输入法。仅 macOS，需要先安装 im-select（brew install im-select）。",
+        "type": "boolean",
+        "default": false
+      },
+      {
+        "key": "imeTarget",
+        "title": "英文输入法 id",
+        "description": "im-select 的输入源 id，默认 com.apple.keylayout.ABC；用 im-select 命令可查看当前值。",
+        "type": "string",
+        "default": "com.apple.keylayout.ABC"
+      }
     ]
   },
-  "safetyNotes": "Starts an interactive login shell (your $SHELL) inside a PTY via a bundled python3 relay (spawned with an argument array, no shell string). The shell has the same OS rights as you; commands you type run unrestricted. The plugin sends no network requests, reads no credentials and writes no files. The panel is a context-isolated work-panel view that talks to the host bridge (term.* channels for the PTY, plus shell.openExternal when you click an http(s) link in the terminal, which only hands the URL to your default browser). Requires python3 on PATH (macOS ships one)."
+  "safetyNotes": "Starts an interactive login shell (your $SHELL) inside a PTY via a bundled python3 relay (spawned with an argument array, no shell string). The shell has the same OS rights as you; commands you type run unrestricted. The plugin sends no network requests, reads no credentials and writes no files. Off by default: when you turn on the input-method switch in the plugin's settings, the terminal panel switches the macOS input source to English while it holds keyboard focus and puts the previous one back when focus leaves, by spawning the optional im-select helper (argument array, no shell string, no Accessibility or Input Monitoring grant). The panel is a context-isolated work-panel view that talks to the host bridge (term.* and ime.* channels, plus shell.openExternal when you click an http(s) link in the terminal, which only hands the URL to your default browser). Requires python3 on PATH (macOS ships one)."
 }

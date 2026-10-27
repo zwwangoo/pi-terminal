@@ -1,6 +1,6 @@
 {
   "name": "pi-terminal",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "private": true,
   "description": "Embedded terminal (xterm.js + python3 PTY relay) plugin for PI-Desktop's work panel",
   "license": "MIT",

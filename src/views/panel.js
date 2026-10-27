@@ -261,6 +261,40 @@
     if (e.metaKey && e.key === "w" && active) { e.preventDefault(); closeTab(active); }
   });
   document.addEventListener("click", function () { if (active) active.term.focus(); });
+
+  // Input method: "focus" here means this panel document actually holds the keyboard. The host docks
+  // the view and never focuses it for us, so clicking into the terminal is what raises focus, and
+  // clicking into chat / another tab / another app lowers it. The backend owns the switching itself;
+  // this side only reports edges, and only believes one once the backend has answered.
+  var imeOn = false; // what the backend has confirmed
+  var imeWant = false; // what this document says it should be
+  var imeBusy = false;
+  function docFocused() {
+    try { return document.hasFocus() === true && document.visibilityState !== "hidden"; } catch (e) { return false; }
+  }
+  function imePump() {
+    if (imeBusy || imeWant === imeOn || !bridge || !bridge.invoke) return;
+    var target = imeWant;
+    imeBusy = true;
+    invoke("ime.sync", { focused: target }).then(function () {
+      imeOn = target;
+    }, function () {
+      /* bridge hiccup (plugin still loading): leave imeOn alone so the reconciler re-sends */
+    }).then(function () {
+      imeBusy = false;
+      imePump();
+    });
+  }
+  function imeSync(focused) {
+    imeWant = focused === true;
+    imePump();
+  }
+  window.addEventListener("focus", function () { imeSync(docFocused()); });
+  window.addEventListener("blur", function () { imeSync(docFocused()); });
+  document.addEventListener("visibilitychange", function () { imeSync(docFocused()); });
+  window.addEventListener("pagehide", function () { imeSync(false); });
+  // Reconcile: a detached view may never deliver a blur, and a refused send was never applied.
+  setInterval(function () { imeSync(docFocused()); }, 500);
   setInterval(checkWorkspace, 1500);
 
   if (!bridge || !bridge.invoke) { setStatus("pluginBridge unavailable"); }
