@@ -37,5 +37,18 @@
       }
     ]
   },
+  "categories": ["terminal"],
+  "i18n": {
+    "en": {
+      "name": "Side Terminal",
+      "description": "Embedded interactive terminal (xterm.js + PTY) for the work panel. Opens a login shell in the current workspace.",
+      "safetyNotes": "Starts an interactive login shell (your $SHELL) inside a PTY via a bundled python3 relay, spawned with an argument array and no shell string. The shell has the same OS rights as you, and commands you type run unrestricted. The plugin sends no network requests, reads no credentials and writes no files. Optional and off by default: the input-method switch changes the macOS input source to English while the terminal has keyboard focus and restores the previous one afterwards, by spawning the optional im-select helper. Clicking an http(s) link in the terminal only hands the URL to your default browser. Requires python3 on PATH."
+    },
+    "zh-CN": {
+      "name": "侧边终端工具",
+      "description": "工作面板内置的交互式终端（xterm.js + PTY），在当前工作区打开登录 shell。",
+      "safetyNotes": "通过随插件附带的 python3 中继在 PTY 中启动交互式登录 shell（使用 $SHELL），以参数数组方式启动，不拼接 shell 字符串。该 shell 与你拥有相同的系统权限，你输入的命令不受限制。插件不发起网络请求、不读取凭据、不写入文件。输入法切换为可选功能，默认关闭：开启后终端获得键盘焦点时会把 macOS 输入法切到英文，离开时恢复原输入法，通过调用可选的 im-select 工具实现。点击终端中的 http(s) 链接只会把网址交给默认浏览器。需要 PATH 中有 python3。"
+    }
+  },
   "safetyNotes": "Starts an interactive login shell (your $SHELL) inside a PTY via a bundled python3 relay (spawned with an argument array, no shell string). The shell has the same OS rights as you; commands you type run unrestricted. The plugin sends no network requests, reads no credentials and writes no files. Off by default: when you turn on the input-method switch in the plugin's settings, the terminal panel switches the macOS input source to English while it holds keyboard focus and puts the previous one back when focus leaves, by spawning the optional im-select helper (argument array, no shell string, no Accessibility or Input Monitoring grant). The panel is a context-isolated work-panel view that talks to the host bridge (term.* and ime.* channels, plus shell.openExternal when you click an http(s) link in the terminal, which only hands the URL to your default browser). Requires python3 on PATH (macOS ships one)."
 }
