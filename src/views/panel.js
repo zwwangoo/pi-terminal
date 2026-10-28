@@ -51,7 +51,7 @@
     document.querySelector(".app").classList.toggle("single", tabs.length < 2);
   }
 
-  function makeTab(id, replayB64, gen) {
+  function makeTab(id, replayB64, gen, nextSeq) {
     var el = document.createElement("div");
     el.className = "term";
     hostEl.appendChild(el);
@@ -90,7 +90,7 @@
     btn.appendChild(x);
     tabsEl.insertBefore(btn, document.getElementById("add"));
 
-    var t = { id: id, gen: gen | 0, term: term, fit: fit, el: el, btn: btn, alive: true, pending: "", sending: false };
+    var t = { id: id, gen: gen | 0, nextSeq: nextSeq | 0, term: term, fit: fit, el: el, btn: btn, alive: true, pending: "", sending: false };
     tabs.push(t);
     btn.addEventListener("click", function (ev) {
       if (ev.target === x) closeTab(t); else activate(t);
@@ -147,8 +147,13 @@
     var fails = 0;
     while (t.alive) {
       var r;
+      // Ask for the chunk after the last one this screen rendered. The backend keeps whole chunks and
+      // answers truncated when that position is already gone, instead of handing back a shorter
+      // stream that looks like the whole output.
+      var req = { id: t.id, gen: t.gen };
+      if (t.nextSeq > 0) req.from = t.nextSeq;
       try {
-        r = await invoke("term.poll", { id: t.id, gen: t.gen });
+        r = await invoke("term.poll", req);
         fails = 0;
       } catch (e) {
         if (++fails > 3) { t.alive = false; t.term.write("\r\n\x1b[31m[terminal backend lost: " + (e && e.message || e) + "]\x1b[0m\r\n"); break; }
@@ -162,7 +167,11 @@
         t.term.write("\r\n\x1b[2m[this terminal is now attached to another panel]\x1b[0m\r\n");
         break;
       }
+      if (r.truncated) {
+        t.term.write("\r\n\x1b[2m[output dropped: this panel fell too far behind to keep it]\x1b[0m\r\n");
+      }
       if (r.data) t.term.write(b64ToBytes(r.data));
+      if (r.nextSeq > 0) t.nextSeq = r.nextSeq;
       if (r.exited) {
         t.alive = false;
         t.btn.classList.add("dead");
@@ -178,7 +187,7 @@
     var size = estimateSize();
     try {
       var r = await invoke("term.open", { cols: size.cols, rows: size.rows });
-      var t = makeTab(r.id, null, r.gen);
+      var t = makeTab(r.id, null, r.gen, r.nextSeq);
       activate(t);
       await new Promise(function (res) { requestAnimationFrame(res); });
       refit(t);
@@ -229,7 +238,7 @@
     for (var i = 0; i < live.length; i++) {
       try {
         var a = await invoke("term.attach", { id: live[i].id });
-        var t = makeTab(live[i].id, a.replay, a.gen);
+        var t = makeTab(live[i].id, a.replay, a.gen, a.nextSeq);
         pollLoop(t);
       } catch (e) {}
     }
@@ -269,6 +278,9 @@
   var imeOn = false; // what the backend has confirmed
   var imeWant = false; // what this document says it should be
   var imeBusy = false;
+  // Identifies this document to the backend: after a reload or with a second panel, only the document
+  // that reported focus last may report the blur that restores the previous input source.
+  var imeClient = Math.random().toString(36).slice(2) + Date.now().toString(36);
   function docFocused() {
     try { return document.hasFocus() === true && document.visibilityState !== "hidden"; } catch (e) { return false; }
   }
@@ -276,10 +288,10 @@
     if (imeBusy || imeWant === imeOn || !bridge || !bridge.invoke) return;
     var target = imeWant;
     imeBusy = true;
-    invoke("ime.sync", { focused: target }).then(function () {
+    invoke("ime.sync", { focused: target, client: imeClient }).then(function () {
       imeOn = target;
     }, function () {
-      /* bridge hiccup (plugin still loading): leave imeOn alone so the reconciler re-sends */
+      /* bridge rejected the send (plugin still loading): leave imeOn alone so the reconciler re-sends */
     }).then(function () {
       imeBusy = false;
       imePump();
@@ -293,7 +305,9 @@
   window.addEventListener("blur", function () { imeSync(docFocused()); });
   document.addEventListener("visibilitychange", function () { imeSync(docFocused()); });
   window.addEventListener("pagehide", function () { imeSync(false); });
-  // Reconcile: a detached view may never deliver a blur, and a refused send was never applied.
+  // Reconcile: a detached view may never deliver a blur, and a send the bridge rejected (plugin still
+  // loading) was never delivered. A reply of {ok:false} (im-select failed) counts as delivered: the
+  // backend keeps what it needs to undo a half-done switch, so it is not retried every 500ms.
   setInterval(function () { imeSync(docFocused()); }, 500);
   setInterval(checkWorkspace, 1500);
 

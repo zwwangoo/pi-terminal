@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "local.terminal",
   "name": "Terminal",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "Embedded interactive terminal (xterm.js + PTY) for the work panel. Opens a login shell in the current workspace.",
   "author": "local",
   "license": "MIT",

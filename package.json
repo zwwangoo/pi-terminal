@@ -1,12 +1,12 @@
 {
   "name": "pi-terminal",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "private": true,
   "description": "Embedded terminal (xterm.js + python3 PTY relay) plugin for PI-Desktop's work panel",
   "license": "MIT",
   "scripts": {
     "build": "node scripts/build.js",
-    "test": "node test/e2e.js"
+    "test": "node test/ring-buffer.js && node test/e2e.js"
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.11.0",

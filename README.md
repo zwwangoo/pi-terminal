@@ -6,10 +6,12 @@ PI-Desktop 工作面板里的内嵌终端：xterm.js 前端 + python3 PTY relay�
 
 ```
 manifest.json            插件清单（id: local.terminal，权限 ui.view + shell.openExternal）
-src/main.src.js          插件进程：会话管理、长轮询、背压、输入法切换（ime.*）；含 __RELAY_SRC__ 占位
+src/main.src.js          插件进程：会话管理、读者游标、长轮询、背压、输入法切换（ime.*）；含 __RELAY_SRC__ 占位
+src/ring-buffer.js       每会话输出环形缓冲（seq 寻址、整块裁剪、truncated）
 src/relay.py             PTY relay（pty.fork + select），构建时内嵌进 main.js
 src/views/               面板：index.html / panel.js / panel.css
 scripts/build.js         组装 dist/local.terminal/（拷入 xterm 与 addon、内嵌 relay）
+test/ring-buffer.js      环形缓冲单测（seq 寻址、整块裁剪、truncated）
 test/e2e.js              离线端到端（mock pi，直连 onPanelInvoke）
 test/harness.js          仅测试用：HTTP 假桥接，可在浏览器里预览面板
 dist/                    构建产物（不入库）
@@ -20,7 +22,7 @@ dist/                    构建产物（不入库）
 ```bash
 npm ci
 npm run build            # -> dist/local.terminal/
-npm test                 # 离线 e2e（会起真实 shell）
+npm test                 # 环形缓冲单测 + 离线 e2e（会起真实 shell）
 ```
 
 然后在 PI-Desktop 里对 `dist/local.terminal` 跑 PluginCheck / PluginPack（PluginCheck 只认工作区相对路径，
@@ -29,12 +31,13 @@ npm test                 # 离线 e2e（会起真实 shell）
 ## 设计要点
 
 - 宿主没有 插件→面板 的推送接口，输出靠 `term.poll` 长轮询；按键 `term.write` 合并批量发送。
-- 面板重开时 `term.attach` 回放 256KB 滚动缓冲，旧 poller 通过 `gen` 被顶掉。
-- 面板落后 4MB 时暂停 shell（背压）。
+- 每段输出带单调 `seq`：`term.poll` 传 `from` 从上次渲染的位置续读。同一位置重试会拿到同一块（可能重复，绝不会跳过）。
+- 每个会话一个按块存取的环形缓冲（`src/ring-buffer.js`，保留 1MiB）：裁剪只丢整块、不会在块内部再切一刀（块边界来自 pty 的单次读取，字符会不会跨块由写入方决定，这一层只保证自己不新增切口）；`term.attach` 回放保留范围并返回 `nextSeq`，旧 poller 通过 `gen` 被顶掉。
+- 背压按“读者落后量”算：有人轮询且落后超过 512KiB 就暂停 pty，追到 128KiB 以下恢复；没人轮询（面板关了、切到别的项目）则不暂停，改为丢最旧的块 —— 后台 shell 因此不会被冻结。只有“同一个面板停顿超过 5 秒后又接着读、而那段输出已被丢掉”时 poll 才返回 `truncated`，面板打出 `[output dropped…]`；切回项目走的是 attach 静默回放，不提示。
 - 只有一个会话时隐藏标签栏（宿主标题栏已有“终端”页签），悬停右上角出现 `+`；两个及以上会话时显示标签栏。
 - 需要 PATH 里有 python3（macOS 自带）。
 - 终端按项目隔离：会话创建时记下所属项目（`projectId`，宿主没给就用主文件夹路径），面板只 attach 当前项目的会话；切换项目后面板靠轮询（1.5s）发现 key 变化并换成新项目的终端，旧项目的 shell 留在后台，切回来时回放滚动缓冲。面板不再往通道里传 `ws`：`pi.workspace.get()` 与面板桥的 `workspace.get` 读的是同一个值。
-- 输入法（macOS，0.1.6 起，**默认关闭**）：需要先在插件设置里打开「自动切换到英文输入法」——没装 `im-select` 的人没有开启的必要，所以默认是关的（设置项的详细说明在标题旁的提示图标里）。打开后：面板文档拿到键盘焦点时（点进终端）把系统输入源切到英文（`imeTarget`，默认 `com.apple.keylayout.ABC`），失焦（点回对话/切 tab/切到别的 app）时切回你原来那个输入源。实现上：面板监听 `window` 的 `focus`/`blur`、`visibilitychange`、`pagehide`，并每 500ms 用 `document.hasFocus()` 对账（宿主切 tab 是把 view 从 contentView 摘掉，不保证发 blur），只在后端**确认过**某条边沿后才认为状态一致，失败的发送会被对账重发；插件进程把边沿排成串行队列（失焦不会插到还在一半的聚焦写入中间），用可选依赖 `im-select`（`/opt/homebrew/bin` 等路径自动探测）读/写输入源，先记住旧值再切。失焦恢复的规则：只有当系统当前的输入源仍是我们切过去的目标时才恢复；若那时已经是别的输入源（你手动换过，或 macOS 报的是前台 app 自己的输入源），我们认为不该覆盖而保持不动。恢复/切换失败时记住的旧值不丢，下一次边沿或 `onUnload` 会重试。未安装 `im-select` 或非 macOS 时整个功能静默 no-op。TIS API 不需要辅助功能/输入监控授权。
+- 输入法（macOS，0.1.6 起，**默认关闭**）：需要先在插件设置里打开「自动切换到英文输入法」——没装 `im-select` 的人没有开启的必要，所以默认是关的（设置项的详细说明在标题旁的提示图标里）。打开后：面板文档拿到键盘焦点时（点进终端）把系统输入源切到英文（`imeTarget`，默认 `com.apple.keylayout.ABC`），失焦（点回对话/切 tab/切到别的 app）时切回你原来那个输入源。实现上：面板监听 `window` 的 `focus`/`blur`、`visibilitychange`、`pagehide`，并每 500ms 用 `document.hasFocus()` 对账（宿主切 tab 是把 view 从 contentView 摘掉，不保证发 blur），只在后端**确认过**某条边沿后才认为状态一致，桥被拒绝的发送（插件还在加载）会被对账重发，而 im-select 自身失败（后端回 `ok:false`）算已送达、不会每 500ms 重试；每个面板文档带一个 `client` id，后端只认**最后一次上报聚焦的那个文档**的失焦（重载/第二个面板迟到的失焦会被忽略，也不会因为某个视图没发失焦而卡死）；插件进程把边沿排成串行队列（失焦不会插到还在一半的聚焦写入中间），按「终端想要焦点」与「已经切换过」两个状态收敛，重复边沿不会再 spawn；插件订阅宿主的 `plugin:settingsChanged` 事件，设置保存后立即生效且不轮询：焦点期间关掉开关会**立刻**恢复原输入源，终端已有焦点时才打开开关会立刻切到英文（订阅成功后设置只在首次读一次，之后每条边沿都不再读设置；宿主没有 `pi.events` 时退回「最多 3 秒读一次」，在下一次焦点变化时生效）；找不到 `im-select` 的结果只缓存 5 秒，之后的下一次焦点变化会重新探测；设置了环境变量 `PI_TERMINAL_IM_SELECT` 时只用它（测试用）；用可选依赖 `im-select`（`/opt/homebrew/bin` 等路径自动探测）读/写输入源，先记住旧值再切。失焦恢复的规则：只有当系统当前的输入源仍是我们切过去的目标时才恢复；若那时已经是别的输入源（你手动换过，或 macOS 报的是前台 app 自己的输入源），我们认为不该覆盖而保持不动。恢复/切换失败时记住的旧值不丢，下一次边沿或 `onUnload` 会重试。未安装 `im-select` 或非 macOS 时整个功能静默 no-op。TIS API 不需要辅助功能/输入监控授权。
 - 链接：xterm 的 WebLinksAddon 捕获终端里的 http(s) 链接，点击后交给宿主桥接通道 `shell.openExternal`（默认浏览器打开）。该通道受同名的 manifest 权限门禁，缺失时宿主回 `PERMISSION_DENIED`，面板会把失败原因写到状态行（不再静默）。宿主只放行 http(s)/mailto，`file://` 或纯路径不会打开。
 
 ## 已知限制
@@ -44,5 +47,5 @@ npm test                 # 离线 e2e（会起真实 shell）
 - 宿主内的桥接往返延迟、停靠与字体渲染尚未做系统实测（离线 e2e 为 mock 桥接）。
 - 链接打开完全依赖宿主通道：若插件版本权限里没有 `shell.openExternal`（老版本 0.1.4 即如此），点击链接会在状态行报 `missing permission: shell.openExternal`，需重新安装本插件以授予该权限。
 - 输入法切换是**系统级**的（macOS 的输入源全局生效，不按窗口）：焦点在终端面板期间，其它面板/输入框也是英文。目标输入源必须是系统里已启用的输入源（`im-select` 只会切到可用项）；未安装 `im-select`（`brew install im-select`）时功能整体不生效。
-- 输入法的失败面：`im-select` 被移除、超时或拒绝切换时，可能**停留在英文**（面板侧不会再发边沿，直到你再次点进/点出终端，或插件重载时 `onUnload` 兜底）；这种情况状态行不报错，只有 `ime.state` 通道能看到 `error`。
+- 输入法的失败面：`im-select` 被移除、超时或拒绝切换时，可能**停留在英文**（失败只上报一次、不自动重试，直到你再次点进/点出终端，或插件重载时 `onUnload` 兜底）；这种情况状态行不报错，只有 `ime.state` 通道能看到 `error`。
 - 面板侧的焦点检测（`window` 的 focus/blur + `document.hasFocus()` 500ms 兜底）只在离线 e2e 里验证了插件进程一侧；宿主 WebContentsView 里“点进终端切英文、点回对话/切 tab 恢复”的真实时序需要装载后人工确认一次。

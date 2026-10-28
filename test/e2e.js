@@ -86,6 +86,82 @@ async function readUntil(id, re, ms = 8000) {
   const dt = (Date.now() - t0) / 1000;
   check("throughput 66MB through poll()", /FIN_5/.test(tail), `${(bytes / 1048576).toFixed(1)}MB in ${dt.toFixed(2)}s = ${(bytes / 1048576 / dt).toFixed(0)}MB/s, ${polls} polls`);
 
+  // seq addressing: a resumed poll continues exactly where the replay ended — no repeated prefix
+  await inv("term.write", { id: o.id, data: "echo SEQ\"\"_A\n" });
+  await readUntil(o.id, /SEQ_A/, 5000);
+  const at2 = await inv("term.attach", { id: o.id });
+  GEN = at2.gen;
+  check("attach names the resume seq", typeof at2.nextSeq === "number" && at2.nextSeq > 1, String(at2.nextSeq));
+  check("attach replay carries the recent output", Buffer.from(at2.replay, "base64").toString("latin1").includes("SEQ_A"));
+
+  check("attach replay cap is 1MiB, not the old 256KB", Buffer.from(at2.replay, "base64").length > 300 * 1024,
+    `${Math.round(Buffer.from(at2.replay, "base64").length / 1024)}KB`);
+  const resumed = await inv("term.poll", { id: o.id, gen: GEN, from: at2.nextSeq });
+  check("poll from nextSeq does not repeat what was just replayed",
+    !Buffer.from(resumed.data, "base64").toString("latin1").includes("SEQ_A"), `${Buffer.from(resumed.data, "base64").length} bytes`);
+
+  // a reader can ask for a position the ring has already trimmed: it must be told, not quietly shortened
+  const dropped = await inv("term.poll", { id: o.id, gen: GEN, from: 1 });
+  check("a from position the ring dropped is reported as truncated", dropped.truncated === true,
+    JSON.stringify({ truncated: dropped.truncated, nextSeq: dropped.nextSeq }));
+  check("truncated poll still returns retained output and a usable nextSeq",
+    Buffer.from(dropped.data, "base64").length > 0 && dropped.nextSeq > 1);
+  const healed = await inv("term.poll", { id: o.id, gen: GEN });
+  check("the cursor heals after a truncated poll", healed.truncated === false, JSON.stringify({ truncated: healed.truncated }));
+
+  // Nobody polls this second session at all. The pty must keep running (the ring trims, the drop is
+  // reported on the next poll). The output deliberately exceeds 4MB — the threshold the old byte queue
+  // paused the pty at — because a pty paused with no reader never resumed: that is the bug this pins.
+  const bg = await inv("term.open", { cols: 80, rows: 24 });
+  await sleep(600);
+  await inv("term.write", { id: bg.id, data: 'seq 1 800000; echo BG""_DONE\n' }); // ~5.5MB, past the old 4MB pause threshold
+  await sleep(3000);
+  const bgFirst = await inv("term.poll", { id: bg.id, gen: 0 });
+  check("an unpolled session drops output instead of freezing its shell", bgFirst.truncated === true,
+    JSON.stringify({ truncated: bgFirst.truncated }));
+  let bgAcc = "", bgT0 = Date.now();
+  while (Date.now() - bgT0 < 20000) {
+    const r = await inv("term.poll", { id: bg.id, gen: 0 });
+    bgAcc += Buffer.from(r.data, "base64").toString("latin1");
+    if (/BG_DONE/.test(bgAcc)) break;
+  }
+  check("the unpolled shell ran to completion", /BG_DONE/.test(bgAcc), `${Date.now() - bgT0}ms`);
+  await inv("term.close", { id: bg.id });
+
+  // A retried poll (host timeout, panel retries) must still get its data. Two polls are in flight with
+  // the same `from` and both have to read that block: a shared cursor would give it to whichever
+  // finished first and hand the retry an empty response — output lost exactly when the host struggles.
+  const at4 = await inv("term.attach", { id: o.id });
+  GEN = at4.gen;
+  const p1 = inv("term.poll", { id: o.id, gen: GEN, from: at4.nextSeq });
+  const p2 = inv("term.poll", { id: o.id, gen: GEN, from: at4.nextSeq });
+  await sleep(150);
+  await inv("term.write", { id: o.id, data: "echo CONC\"\"_Z\n" });
+  const [c1, c2] = await Promise.all([p1, p2]);
+  const cb1 = Buffer.from(c1.data, "base64"), cb2 = Buffer.from(c2.data, "base64");
+  check("a retried poll at the same seq still receives its data",
+    cb1.length > 0 && cb2.length > 0 && cb2.slice(0, 16).equals(cb1.slice(0, 16)), `p1=${cb1.length}B p2=${cb2.length}B`);
+
+  // The pause guard has to keep watching. A reader that looks active, stays behind, then disappears
+  // must not leave the pty paused forever — that is the 0.1.6 freeze in a new shape.
+  const pzMarker = path.join(require("os").tmpdir(), "pi-terminal-pause-guard.txt");
+  try { require("fs").unlinkSync(pzMarker); } catch (_) {}
+  const pz = await inv("term.open", { cols: 80, rows: 24 });
+  await sleep(600);
+  await inv("term.poll", { id: pz.id, gen: 0 });   // reader looks active...
+  await inv("term.write", { id: pz.id, data: `seq 1 800000; echo alive > ${pzMarker}\n` }); // ...then floods
+  await sleep(500);                                 // backlog > 512KiB with a recent poll -> the pty pauses
+  await inv("term.poll", { id: pz.id, gen: 0 });    // drains part of it, stays behind -> the pause is kept
+  await sleep(3000);                                // and now the reader never comes back
+  let pzAlive = false;
+  const pzT0 = Date.now();
+  while (Date.now() - pzT0 < 25000) {
+    if (require("fs").existsSync(pzMarker)) { pzAlive = true; break; }
+    await sleep(200);
+  }
+  check("a pty paused by a reader that then vanished is released", pzAlive, `${Date.now() - pzT0}ms`);
+  await inv("term.close", { id: pz.id });
+
   // interactive full-screen app with alt-screen + resize
   await inv("term.write", { id: o.id, data: "vi -u NONE -N /tmp/_pi_term_test.txt\n" });
   const v = await readUntil(o.id, /\x1b\[\?1049h/, 5000);
@@ -141,6 +217,7 @@ async function readUntil(id, re, ms = 8000) {
   const imeDir = fsMod.mkdtempSync(path.join(osMod.tmpdir(), "pi-ime-"));
   const imeState = path.join(imeDir, "state");
   const imeFail = path.join(imeDir, "fail");
+  const imeCalls = path.join(imeDir, "calls");
   const imeStub = path.join(imeDir, "im-select");
   fsMod.writeFileSync(imeState, "com.example.zh\n");
   // Writes take 200ms and fail while the "fail" marker exists, so an edge really is in flight when the
@@ -149,6 +226,7 @@ async function readUntil(id, re, ms = 8000) {
     "#!/bin/sh",
     `S="${imeState}"`,
     `F="${imeFail}"`,
+    'echo "call:$1" >> "' + imeCalls + '"',
     'if [ -z "$1" ]; then cat "$S"; exit 0; fi',
     "sleep 0.2",
     'if [ -f "$F" ]; then echo "stub refuses to switch" >&2; exit 3; fi',
@@ -171,6 +249,7 @@ async function readUntil(id, re, ms = 8000) {
   await sleep(TTL);
   const off = await inv("ime.sync", { focused: true });
   check("ime: explicit off is a no-op", off.switched === false && off.reason === "disabled" && imeNow() === "com.example.zh", JSON.stringify(off));
+  await inv("ime.sync", { focused: false }); // the terminal lost focus again: next focus is a fresh edge
 
   // a custom target id is honoured once the switch is on
   global.pi.plugin.getSettings = async () => ({ imeAutoSwitch: true, imeTarget: "com.apple.keylayout.US" });
@@ -210,6 +289,7 @@ async function readUntil(id, re, ms = 8000) {
   const savedAfterFail = (await inv("ime.state", {})).saved;
   check("ime: failed switch is reported and nothing is claimed", failFocus.ok === false && imeNow() === "com.example.zh" && savedAfterFail === "", `${JSON.stringify(failFocus)} saved=${savedAfterFail}`);
   fsMod.rmSync(imeFail, { force: true });
+  await inv("ime.sync", { focused: false }); // close the failed edge so the next focus is a new one
 
   // a refused restore keeps the memory so a later edge (or unload) can retry
   await inv("ime.sync", { focused: true });
@@ -227,6 +307,96 @@ async function readUntil(id, re, ms = 8000) {
 
   const imeSt = await inv("ime.state", {});
   check("ime: state reports the resolved stub", imeSt.supported === true && imeSt.binary === imeStub && imeSt.enabled === true && imeSt.focused === false, JSON.stringify(imeSt));
+
+  // ---- from here on the host pushes settings changes (pi.events), as the real host does
+  const ABC = "com.apple.keylayout.ABC", ZH = "com.example.zh";
+  const nCalls = () => { try { return fsMod.readFileSync(imeCalls, "utf8").split("\n").filter(Boolean).length; } catch (_) { return 0; } };
+  const listeners = new Set();
+  global.pi.events = {
+    on: (e, h) => { if (e === "plugin:settingsChanged") listeners.add(h); },
+    off: (e, h) => { listeners.delete(h); },
+  };
+  await m.onLoad(); // subscribes
+  check("ime: onLoad subscribes to settings events", listeners.size === 1, "listeners=" + listeners.size);
+  let settingsReads = 0;
+  let currentSettings = { imeAutoSwitch: true };
+  global.pi.plugin.getSettings = async () => { settingsReads++; return currentSettings; };
+  // the host saves, then pushes the merged object; wait for the queued reconcile (stub writes take 200ms)
+  const pushSettings = async (v) => { currentSettings = v; for (const h of [...listeners]) h(v); await sleep(700); };
+
+  // already on English: the first focus reads once, repeats of the same edge spawn nothing
+  setIme(ABC);
+  fsMod.writeFileSync(imeCalls, "");
+  await inv("ime.sync", { focused: true });
+  const afterFirst = nCalls();
+  await inv("ime.sync", { focused: true });
+  await inv("ime.sync", { focused: true });
+  check("ime: repeated focus spawns nothing", afterFirst === 1 && nCalls() === afterFirst, `first=${afterFirst} total=${nCalls()}`);
+  await inv("ime.sync", { focused: false });
+  check("ime: blur after an English focus leaves the layout alone", imeNow() === ABC, imeNow());
+
+  // a second / reloaded panel: only the document that reported focus last may blur
+  setIme(ZH);
+  await inv("ime.sync", { focused: true, client: "A" });
+  await inv("ime.sync", { focused: true, client: "B" });
+  const lateBlur = await inv("ime.sync", { focused: false, client: "A" });
+  check("ime: a late blur from the previous panel is ignored", lateBlur.reason === "not-owner" && imeNow() === ABC, `${JSON.stringify(lateBlur)} now=${imeNow()}`);
+  await inv("ime.sync", { focused: false, client: "B" });
+  check("ime: the owning panel's blur restores", imeNow() === ZH, imeNow());
+  const orphan = await inv("ime.sync", { focused: true, client: "gone" });
+  await inv("ime.sync", { focused: true, client: "next" });
+  await inv("ime.sync", { focused: false, client: "next" });
+  check("ime: a panel that vanished without a blur cannot pin the state", imeNow() === ZH && orphan.switched === true, `${JSON.stringify(orphan)} now=${imeNow()}`);
+
+  // switch turned off while the terminal has focus: the host pushes the change and the source goes
+  // back at once, without waiting for a blur
+  setIme(ZH);
+  await inv("ime.sync", { focused: true });
+  check("ime: (setup) focused terminal is on English", imeNow() === ABC, imeNow());
+  await pushSettings({ imeAutoSwitch: false });
+  const offSt = await inv("ime.state", {});
+  check("ime: disabling while focused restores at once",
+    imeNow() === ZH && offSt.saved === "" && offSt.applied === false && offSt.focused === true,
+    `now=${imeNow()} ${JSON.stringify(offSt)}`);
+  const offBlur = await inv("ime.sync", { focused: false });
+  check("ime: ...and the blur afterwards has nothing left to do", offBlur.switched === false && imeNow() === ZH, JSON.stringify(offBlur));
+
+  // switch turned on while the terminal already has focus: picked up from the pushed event
+  setIme(ZH);
+  const offFocus = await inv("ime.sync", { focused: true });
+  await pushSettings({ imeAutoSwitch: true });
+  check("ime: enabling while focused takes effect on its own", offFocus.reason === "disabled" && imeNow() === ABC, `${offFocus.reason} now=${imeNow()}`);
+  await inv("ime.sync", { focused: false });
+  check("ime: ...and the blur afterwards restores", imeNow() === ZH, imeNow());
+
+  // a pushed target applies to the next focus
+  await pushSettings({ imeAutoSwitch: true, imeTarget: "com.apple.keylayout.US" });
+  const pushedTarget = await inv("ime.sync", { focused: true });
+  check("ime: pushed target is used", pushedTarget.to === "com.apple.keylayout.US" && imeNow() === "com.apple.keylayout.US", JSON.stringify(pushedTarget));
+  await inv("ime.sync", { focused: false });
+  await pushSettings({ imeAutoSwitch: true });
+
+  // im-select removed and later put back: found again (after the short miss cache) without a reload
+  const away = imeStub + ".away";
+  fsMod.renameSync(imeStub, away);
+  setIme(ZH);
+  const gone = await inv("ime.sync", { focused: true });
+  await inv("ime.sync", { focused: false });
+  check("ime: a vanished binary is an error, not a crash", gone.ok === false && imeNow() === ZH, JSON.stringify(gone));
+  fsMod.renameSync(away, imeStub);
+  const missing = await inv("ime.sync", { focused: true });
+  check("ime: a fresh miss is remembered briefly", missing.reason === "im-select-missing" && imeNow() === ZH, JSON.stringify(missing));
+  await inv("ime.sync", { focused: false });
+  await sleep(5300);
+  const found = await inv("ime.sync", { focused: true });
+  check("ime: binary is looked up again after the miss expires", found.switched === true && imeNow() === ABC, `${JSON.stringify(found)} now=${imeNow()}`);
+  await inv("ime.sync", { focused: false });
+  check("ime: ...and restores afterwards", imeNow() === ZH, imeNow());
+
+  // the whole point of subscribing: no settings read on any edge since the event feed took over
+  check("ime: no settings polling once subscribed", settingsReads === 0, "reads=" + settingsReads);
+  await m.onUnload();
+  check("ime: unload unsubscribes from settings events", listeners.size === 0, "listeners=" + listeners.size);
   }
 
   await m.onUnload();

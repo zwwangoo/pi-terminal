@@ -24,6 +24,9 @@ const mainSrc = fs.readFileSync(path.join(src, "main.src.js"), "utf8");
 if (!mainSrc.includes("__RELAY_SRC__")) throw new Error("main.src.js has no __RELAY_SRC__ placeholder");
 fs.writeFileSync(path.join(out, "main.js"), mainSrc.replace("__RELAY_SRC__", () => JSON.stringify(relay)));
 
+// main.js requires ./ring-buffer.js at runtime, so it has to sit next to it in the installed tree.
+cp(path.join(src, "ring-buffer.js"), "ring-buffer.js");
+
 cp(path.join(root, "manifest.json"), "manifest.json");
 cp(path.join(root, "README.md"), "README.md");
 for (const f of ["index.html", "panel.js", "panel.css"]) cp(path.join(src, "views", f), "views/" + f);
