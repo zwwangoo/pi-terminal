@@ -211,6 +211,59 @@ async function readUntil(id, re, ms = 8000) {
   check("closed session rejected", threw);
   check("unknown channel rejected", await inv("bogus", {}).then(() => false, () => true));
 
+  // Panel settings (term.settings): the backend cleans what the user typed, the panel only applies it.
+  // The settings cache lives 3s without a host event, hence the sleeps between mock changes.
+  const ps0 = await inv("term.settings", {});
+  check("settings: defaults with nothing set", ps0.fontSize === 13 && ps0.fontFamily === "" && ps0.linkNeedsModifier === false && ps0.pasteSingleLine === false, JSON.stringify(ps0));
+  global.pi.plugin.getSettings = async () => ({ fontSize: 16, fontFamily: "JetBrains Mono", linkNeedsModifier: true, pasteSingleLine: true });
+  await sleep(3200);
+  const ps1 = await inv("term.settings", {});
+  check("settings: custom values pass through", ps1.fontSize === 16 && ps1.fontFamily === "JetBrains Mono" && ps1.linkNeedsModifier === true && ps1.pasteSingleLine === true, JSON.stringify(ps1));
+  global.pi.plugin.getSettings = async () => ({ fontSize: 99, fontFamily: 'Fira"; } body { x: y\n', linkNeedsModifier: "yes", pasteSingleLine: 1 });
+  await sleep(3200);
+  const ps2 = await inv("term.settings", {});
+  check("settings: font size is clamped to 8..32", ps2.fontSize === 32, JSON.stringify(ps2));
+  check("settings: font family cannot carry CSS syntax", !/[;{}<>\n]/.test(ps2.fontFamily) && ps2.fontFamily.startsWith("Fira"), JSON.stringify(ps2.fontFamily));
+  check("settings: non-boolean switches stay off", ps2.linkNeedsModifier === false && ps2.pasteSingleLine === false, JSON.stringify(ps2));
+  global.pi.plugin.getSettings = async () => ({ fontSize: "abc", fontFamily: 42 });
+  await sleep(3200);
+  const ps3 = await inv("term.settings", {});
+  check("settings: garbage falls back to defaults", ps3.fontSize === 13 && ps3.fontFamily === "", JSON.stringify(ps3));
+  global.pi.plugin.getSettings = async () => ({ fontSize: 3 });
+  await sleep(3200);
+  check("settings: tiny font size is clamped up to 8", (await inv("term.settings", {})).fontSize === 8);
+  global.pi.plugin.getSettings = async () => ({ fontSize: 0 }); // what the host writes when the box is cleared
+  await sleep(3200);
+  check("settings: a cleared font size box means default, not the minimum", (await inv("term.settings", {})).fontSize === 13);
+
+  // Saving the zoomed font size (term.saveFont). The mock behaves like the host: setSettings merges into a
+  // store, getSettings reads it back, and nothing is pushed as an event (the host only does that for its own dialog).
+  const hostStore = { linkNeedsModifier: true }; // an unrelated stored value that must survive
+  const hostWrites = [];
+  global.pi.plugin.getSettings = async () => ({ ...hostStore });
+  global.pi.plugin.setSettings = async (partial) => { hostWrites.push(partial); Object.assign(hostStore, partial); };
+  await sleep(3200);
+  const sv1 = await inv("term.saveFont", { fontSize: 17 });
+  check("saveFont: writes the size through the host", sv1.ok === true && sv1.fontSize === 17 && hostWrites.length === 1 && hostWrites[0].fontSize === 17 && Object.keys(hostWrites[0]).length === 1, JSON.stringify({ sv1, hostWrites }));
+  const sv1r = await inv("term.settings", {});
+  check("saveFont: the next read already sees it (cache updated, no stale value)", sv1r.fontSize === 17, JSON.stringify(sv1r));
+  check("saveFont: other stored settings are kept", sv1r.linkNeedsModifier === true, JSON.stringify(sv1r));
+  await sleep(3200); // past the cache TTL: re-read from the "host", which now holds 17
+  check("saveFont: survives a re-read from the host", (await inv("term.settings", {})).fontSize === 17);
+  const sv2 = await inv("term.saveFont", { fontSize: 99 });
+  check("saveFont: a size outside the range is clamped before it is stored", sv2.fontSize === 32 && hostStore.fontSize === 32, JSON.stringify({ sv2, stored: hostStore.fontSize }));
+  const bad = [0, -4, "abc", null, undefined, NaN];
+  let badRejected = 0;
+  for (const b of bad) { if (await inv("term.saveFont", { fontSize: b }).then(() => false, () => true)) badRejected++; }
+  check("saveFont: 0, negatives and non-numbers are rejected and nothing is stored", badRejected === bad.length && hostStore.fontSize === 32 && hostWrites.length === 2, JSON.stringify({ badRejected, writes: hostWrites.length }));
+  global.pi.plugin.setSettings = async () => { throw new Error("disk full"); };
+  const failed = await inv("term.saveFont", { fontSize: 20 }).then(() => "saved", (e) => String(e.message || e));
+  check("saveFont: a failed write is reported", failed.includes("disk full"), failed);
+  check("saveFont: ...and the cache keeps the stored value, not the one that failed", (await inv("term.settings", {})).fontSize === 32);
+  delete global.pi.plugin.setSettings;
+  check("saveFont: a host without setSettings is a clean error", await inv("term.saveFont", { fontSize: 15 }).then(() => false, (e) => /cannot save/.test(String(e.message))));
+  global.pi.plugin.getSettings = async () => ({});
+
   // Input method: main.js drives im-select, so the test points it at a stub and reads the stub's own
   // state file. The real im-select (and the user's layout) is never touched.
   const fsMod = require("fs"), osMod = require("os");

@@ -24,3 +24,12 @@ html, body { height: 100%; margin: 0; background: var(--bg); color: var(--fg); f
 .term.on { display: block; }
 .term .xterm { height: 100%; }
 .term .xterm-viewport { background: transparent !important; }
+/* Right-click menu: positioned by panel.js, colors follow the host light/dark base. */
+.ctx { --menu-bg: #242424; --menu-hover: rgba(255, 255, 255, 0.1); --menu-line: rgba(255, 255, 255, 0.14); position: fixed; z-index: 20; min-width: 176px; padding: 4px; border: 1px solid var(--menu-line); border-radius: 8px; background: var(--menu-bg); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35); }
+:root[data-base="light"] .ctx { --menu-bg: #ffffff; --menu-hover: rgba(0, 0, 0, 0.07); --menu-line: rgba(0, 0, 0, 0.12); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15); }
+.ctx[hidden] { display: none; }
+.ctx-item { display: flex; align-items: center; justify-content: space-between; gap: 24px; width: 100%; box-sizing: border-box; padding: 5px 10px; border: 0; border-radius: 5px; background: transparent; color: var(--fg); font: inherit; text-align: left; cursor: default; }
+.ctx-item:hover:not(:disabled), .ctx-item:focus-visible { background: var(--menu-hover); outline: none; }
+.ctx-item:disabled { opacity: .4; }
+.ctx-hint { opacity: .5; font-size: 11px; }
+.ctx-sep { height: 1px; margin: 4px 6px; background: var(--menu-line); }

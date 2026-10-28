@@ -221,7 +221,7 @@ function closeSession(id) {
 // Settings: read once and then kept current by the host's change event (see onLoad); without that
 // event they are re-read at most once per TTL. The first focus waits for the real value so a plugin
 // with the switch turned off never flips the layout even once.
-async function imeSettings() {
+async function rawSettings() {
   // Once subscribed to the host's change event the cache is pushed to us and never goes stale.
   const fresh = settingsCache.at > 0 && (settingsLive || Date.now() - settingsCache.at <= SETTINGS_TTL_MS);
   if (!fresh) {
@@ -235,11 +235,67 @@ async function imeSettings() {
       if (ver === settingsVer) settingsCache = { at: 0, value: settingsCache.value };
     }
   }
-  const v = settingsCache.value || {};
+  return settingsCache.value || {};
+}
+
+async function imeSettings() {
+  const v = await rawSettings();
   return {
     enabled: v.imeAutoSwitch === true, // off unless the user turns it on
     target: typeof v.imeTarget === "string" && v.imeTarget ? v.imeTarget : IME_DEFAULT_TARGET,
   };
+}
+
+// Appearance / behaviour settings for the panel. The panel has no settings API of its own, so it asks
+// for them here (cheap: served from the same cache) and applies them without a reload. Whatever is
+// stored is cleaned here, so the panel only ever sees values it can use.
+//
+// Only the three switches (linkNeedsModifier, pasteSingleLine, imeAutoSwitch) have a form in the host's
+// settings dialog. fontSize, fontFamily and imeTarget are deliberately not declared in the manifest (the
+// host draws text boxes much taller than its switches), but they are still real settings: they have the
+// defaults below, and they are read from the plugin's settings.json, so they can be set by hand there.
+// fontSize is also written back by saveFontSize when the user zooms the panel.
+const FONT_DEFAULT = 13;
+const FONT_MIN = 8;
+const FONT_MAX = 32;
+// A usable font size, or null for "not set": 0 and below (the host's number box writes 0 when cleared),
+// NaN, and non-numbers all mean the default.
+function cleanFontSize(raw) {
+  const n = typeof raw === "number" ? raw : typeof raw === "string" && raw.trim() !== "" ? Number(raw) : NaN;
+  return Number.isFinite(n) && n > 0 ? Math.max(FONT_MIN, Math.min(FONT_MAX, Math.round(n))) : null;
+}
+async function panelSettings() {
+  const v = await rawSettings();
+  const family = typeof v.fontFamily === "string" ? v.fontFamily.replace(/[;{}<>\\\r\n]/g, " ").trim().slice(0, 200) : "";
+  return {
+    fontSize: cleanFontSize(v.fontSize) ?? FONT_DEFAULT,
+    fontFamily: family,
+    linkNeedsModifier: v.linkNeedsModifier === true,
+    pasteSingleLine: v.pasteSingleLine === true,
+  };
+}
+
+// Persist the size the user zoomed to. The host only pushes its change event for saves made in its own
+// dialog, so a plugin-side save has to update the shared cache itself; otherwise the next read would
+// still hand out the old value. The previous cache is put back when the write fails, so what the panel
+// sees stays what is actually stored.
+async function saveFontSize(p) {
+  const size = cleanFontSize(p && p.fontSize);
+  if (size === null) throw new Error("fontSize must be a positive number");
+  const write = typeof pi !== "undefined" && pi.plugin && pi.plugin.setSettings;
+  if (!write) throw new Error("this host cannot save plugin settings");
+  const before = await rawSettings();
+  const prev = settingsCache;
+  settingsVer++;
+  settingsCache = { at: Date.now(), value: { ...before, fontSize: size } };
+  try {
+    await pi.plugin.setSettings({ fontSize: size });
+  } catch (e) {
+    settingsVer++;
+    settingsCache = prev;
+    throw e;
+  }
+  return { ok: true, fontSize: size };
 }
 
 // im-select on a non-standard prefix, or the stub a test points us at. A hit is kept; a miss is only
@@ -400,6 +456,10 @@ async function onPanelInvoke(channel, p) {
       return imeSync(p.focused === true, p.client);
     case "ime.state":
       return imeState();
+    case "term.settings":
+      return panelSettings();
+    case "term.saveFont":
+      return saveFontSize(p);
     case "term.open":
       return openSession(p);
     case "term.attach": {
