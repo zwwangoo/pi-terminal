@@ -524,6 +524,22 @@ function onSettingsChanged(next) {
   imeEnqueue(imeReconcile).catch(() => {});
 }
 
+// Window shortcut (⌘T by default): the manifest's `openShortcut` setting names this command and the
+// main window runs it on the keypress. The work-panel tab belongs to the host, so the command can
+// only ask it to reveal our view. With no active session the host refuses; a keypress stays quiet.
+// The host drops the command itself when the plugin unloads.
+const COMMAND_OPEN = "local.terminal.open";
+
+function registerOpenCommand() {
+  return pi.commands.register({
+    id: COMMAND_OPEN,
+    title: "打开终端",
+    category: "terminal",
+    keywords: ["terminal", "shell", "终端"],
+    run: async () => { try { await pi.ui.revealView({ viewId: "terminal" }); } catch (_) {} },
+  });
+}
+
 async function onLoad() {
   try {
     if (typeof pi !== "undefined" && pi.events && typeof pi.events.on === "function") {
@@ -533,6 +549,7 @@ async function onLoad() {
   } catch (_) {
     /* no event API: the TTL read still works */
   }
+  await registerOpenCommand();
 }
 
 async function onUnload() {

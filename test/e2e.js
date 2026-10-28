@@ -3,6 +3,7 @@ const path = require("path");
 global.pi = {
   workspace: { get: async () => ({ path: process.argv[2] || process.env.HOME }) },
   plugin: { getSettings: async () => ({}) },
+  commands: { register: async () => ({ ok: true }) },
 };
 const m = require(path.resolve(__dirname, "..", "dist", "local.terminal", "main.js"));
 const inv = (c, p) => m.onPanelInvoke(c, p);

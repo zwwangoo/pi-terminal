@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "local.terminal",
   "name": "Terminal",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Embedded interactive terminal (xterm.js + PTY) for the work panel. Opens a login shell in the current workspace.",
   "author": "local",
   "license": "MIT",
@@ -19,6 +19,9 @@
         "entry": "views/index.html",
         "order": 30
       }
+    ],
+    "commands": [
+      { "id": "local.terminal.open", "title": "打开终端" }
     ],
     "settings": [
       {
@@ -41,6 +44,14 @@
         "description": "终端获得键盘焦点时切到英文输入法，离开时切回原来的输入法。仅 macOS，需要先安装 im-select（brew install im-select）。",
         "type": "boolean",
         "default": false
+      },
+      {
+        "key": "openShortcut",
+        "title": "打开终端面板的快捷键",
+        "description": "在对话窗口里按下这个组合键，把终端面板切到前台。默认 ⌘T（Windows / Linux 是 Ctrl+T）；终端面板内部的 ⌘T 仍是新建标签。",
+        "type": "shortcut",
+        "default": "Mod+T",
+        "command": "local.terminal.open"
       }
     ]
   },
