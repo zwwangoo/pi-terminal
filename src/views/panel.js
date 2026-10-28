@@ -32,9 +32,12 @@
     statusTimer = setTimeout(function () { setStatus(""); }, 4000);
   }
   var ZH = /^zh/i.test((navigator.language || "") + "");
-  var L = ZH
-    ? { copy: "\u590d\u5236", paste: "\u7c98\u8d34", pasteLine: "\u7c98\u8d34\u4e3a\u5355\u884c", pasteRaw: "\u7c98\u8d34\uff08\u4fdd\u7559\u6362\u884c\uff09", selectAll: "\u5168\u9009", clear: "\u6e05\u9664\u6eda\u52a8\u7f13\u51b2", newTab: "\u65b0\u5efa\u6807\u7b7e", closeTab: "\u5173\u95ed\u6807\u7b7e", openLink: "\u6253\u5f00\u94fe\u63a5", copyLink: "\u590d\u5236\u94fe\u63a5\u5730\u5740", linkHint: "\u6309\u4f4f \u2318 \u70b9\u51fb\u94fe\u63a5\u624d\u4f1a\u6253\u5f00", copyFail: "\u65e0\u6cd5\u590d\u5236: ", pasteFail: "\u65e0\u6cd5\u7c98\u8d34: ", openFail: "\u65e0\u6cd5\u6253\u5f00 " }
-    : { copy: "Copy", paste: "Paste", pasteLine: "Paste as Single Line", pasteRaw: "Paste with Line Breaks", selectAll: "Select All", clear: "Clear Scrollback", newTab: "New Tab", closeTab: "Close Tab", openLink: "Open Link", copyLink: "Copy Link Address", linkHint: "Hold \u2318 and click to open the link", copyFail: "Cannot copy: ", pasteFail: "Cannot paste: ", openFail: "Cannot open " };
+  // Panel copy: one table per language with the same keys. Values go in through textContent / setAttribute only.
+  var I18N = {
+    en: { copy: "Copy", paste: "Paste", pasteLine: "Paste as Single Line", pasteRaw: "Paste with Line Breaks", selectAll: "Select All", clear: "Clear Scrollback", newTab: "New Tab", closeTab: "Close Tab", openLink: "Open Link", copyLink: "Copy Link Address", linkHint: "Hold \u2318 and click to open the link", copyFail: "Cannot copy: ", pasteFail: "Cannot paste: ", openFail: "Cannot open ", saveFail: "Cannot save font size: ", noBridge: "pluginBridge unavailable", startFail: "Failed to start terminal: ", exited: "process exited", dropped: "output dropped: this panel fell too far behind to keep it", superseded: "this terminal is now attached to another panel", backendLost: "terminal backend lost: ", newTabAria: "New terminal", newTabTip: "New terminal (\u2318T)" },
+    "zh-CN": { copy: "\u590d\u5236", paste: "\u7c98\u8d34", pasteLine: "\u7c98\u8d34\u4e3a\u5355\u884c", pasteRaw: "\u7c98\u8d34\uff08\u4fdd\u7559\u6362\u884c\uff09", selectAll: "\u5168\u9009", clear: "\u6e05\u9664\u6eda\u52a8\u7f13\u51b2", newTab: "\u65b0\u5efa\u6807\u7b7e", closeTab: "\u5173\u95ed\u6807\u7b7e", openLink: "\u6253\u5f00\u94fe\u63a5", copyLink: "\u590d\u5236\u94fe\u63a5\u5730\u5740", linkHint: "\u6309\u4f4f \u2318 \u70b9\u51fb\u94fe\u63a5\u624d\u4f1a\u6253\u5f00", copyFail: "\u65e0\u6cd5\u590d\u5236: ", pasteFail: "\u65e0\u6cd5\u7c98\u8d34: ", openFail: "\u65e0\u6cd5\u6253\u5f00 ", saveFail: "\u65e0\u6cd5\u4fdd\u5b58\u5b57\u4f53\u5927\u5c0f: ", noBridge: "\u63d2\u4ef6\u6865\u63a5\u4e0d\u53ef\u7528", startFail: "\u542f\u52a8\u7ec8\u7aef\u5931\u8d25: ", exited: "\u8fdb\u7a0b\u5df2\u9000\u51fa", dropped: "\u8f93\u51fa\u5df2\u4e22\u5f03\uff1a\u9762\u677f\u843d\u540e\u592a\u591a\uff0c\u65e0\u6cd5\u4fdd\u7559", superseded: "\u6b64\u7ec8\u7aef\u5df2\u8fde\u63a5\u5230\u53e6\u4e00\u4e2a\u9762\u677f", backendLost: "\u7ec8\u7aef\u540e\u7aef\u5df2\u65ad\u5f00: ", newTabAria: "\u65b0\u5efa\u7ec8\u7aef", newTabTip: "\u65b0\u5efa\u7ec8\u7aef\uff08\u2318T\uff09" },
+  };
+  var L = ZH ? I18N["zh-CN"] : I18N.en;
   function errText(e) { return (e && e.message) || e || "unknown error"; }
   // Clipboard goes through the host channels (manifest permissions clipboard.write / clipboard.read);
   // navigator.clipboard is only a fallback, and a refusal on both lands on the status line.
@@ -90,7 +93,11 @@
   }
   var fontEpoch = 0; // bumped by every local zoom and every finished save, see applySettings
   var fontSaveTimer = 0, fontPending = null;
-  L.saveFail = ZH ? "\u65e0\u6cd5\u4fdd\u5b58\u5b57\u4f53\u5927\u5c0f: " : "Cannot save font size: ";
+  // Static page text: the markup carries English, and is switched to the app language here.
+  ["add", "float-add"].forEach(function (id) {
+    var b = document.getElementById(id);
+    if (b) { b.setAttribute("aria-label", L.newTabAria); b.title = L.newTabTip; }
+  });
   // persist=true for a zoom the user did (it is kept across restarts); false when the value came from the
   // stored settings, which must not be written straight back.
   function setFont(n, persist) {
@@ -306,7 +313,7 @@
         r = await invoke("term.poll", req);
         fails = 0;
       } catch (e) {
-        if (++fails > 3) { t.alive = false; t.term.write("\r\n\x1b[31m[terminal backend lost: " + (e && e.message || e) + "]\x1b[0m\r\n"); break; }
+        if (++fails > 3) { t.alive = false; t.term.write("\r\n\x1b[31m[" + L.backendLost + (e && e.message || e) + "]\x1b[0m\r\n"); break; }
         await new Promise(function (res) { setTimeout(res, 300); });
         continue;
       }
@@ -314,18 +321,18 @@
       if (r.superseded) {
         t.alive = false;
         t.btn.classList.add("dead");
-        t.term.write("\r\n\x1b[2m[this terminal is now attached to another panel]\x1b[0m\r\n");
+        t.term.write("\r\n\x1b[2m[" + L.superseded + "]\x1b[0m\r\n");
         break;
       }
       if (r.truncated) {
-        t.term.write("\r\n\x1b[2m[output dropped: this panel fell too far behind to keep it]\x1b[0m\r\n");
+        t.term.write("\r\n\x1b[2m[" + L.dropped + "]\x1b[0m\r\n");
       }
       if (r.data) t.term.write(b64ToBytes(r.data));
       if (r.nextSeq > 0) t.nextSeq = r.nextSeq;
       if (r.exited) {
         t.alive = false;
         t.btn.classList.add("dead");
-        var msg = "\r\n\x1b[2m[process exited" + (r.exitCode != null ? " with code " + r.exitCode : "") + "]\x1b[0m\r\n";
+        var msg = "\r\n\x1b[2m[" + L.exited + (r.exitCode != null ? " (" + r.exitCode + ")" : "") + "]\x1b[0m\r\n";
         if (r.error) msg += "\x1b[31m" + r.error.replace(/\n/g, "\r\n") + "\x1b[0m\r\n";
         t.term.write(msg);
         break;
@@ -344,7 +351,7 @@
       pollLoop(t);
       setStatus("");
     } catch (e) {
-      setStatus("Failed to start terminal: " + (e && e.message || e));
+      setStatus(L.startFail + (e && e.message || e));
     }
   }
 
@@ -578,7 +585,7 @@
   window.addEventListener("focus", function () { refreshSettings(); });
   document.addEventListener("visibilitychange", function () { refreshSettings(); });
 
-  if (!bridge || !bridge.invoke) { setStatus("pluginBridge unavailable"); }
+  if (!bridge || !bridge.invoke) { setStatus(L.noBridge); }
   else {
     applyAppearance(null);
     if (bridge.on) bridge.on("appearance:changed", applyAppearance);
