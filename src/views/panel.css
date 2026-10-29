@@ -17,6 +17,12 @@ html, body { height: 100%; margin: 0; background: var(--bg); color: var(--fg); f
 .app.single .float-add { display: block; }
 .app.single .terms:hover .float-add, .float-add:focus-visible { opacity: .75; }
 .app.single .float-add:hover { opacity: 1; }
+/* Which backend the active tab runs on: a "tmux" tab tag, and for a single tab (bar hidden) a corner badge. */
+.tab .tag { padding: 0 4px; border-radius: 4px; background: rgba(0, 187, 187, 0.22); color: #2fbfbf; font-size: 10px; line-height: 14px; }
+.mode { display: none; position: absolute; top: 5px; right: 40px; z-index: 5; padding: 0 6px; border-radius: 4px; background: var(--bar); font-size: 10px; line-height: 16px; opacity: .6; pointer-events: none; }
+.mode.tmux { color: #2fbfbf; opacity: .9; }
+.app.single .mode { display: block; }
+.mode:empty { display: none !important; }
 .status { position: absolute; left: 8px; right: 8px; bottom: 6px; z-index: 5; padding: 4px 8px; border-radius: 6px; background: var(--bar); color: #d9534f; pointer-events: none; }
 .status:empty { display: none; }
 .terms { position: relative; flex: 1; min-height: 0; padding: 6px 0 4px 8px; background: var(--bg); }
@@ -32,4 +38,5 @@ html, body { height: 100%; margin: 0; background: var(--bg); color: var(--fg); f
 .ctx-item:hover:not(:disabled), .ctx-item:focus-visible { background: var(--menu-hover); outline: none; }
 .ctx-item:disabled { opacity: .4; }
 .ctx-hint { opacity: .5; font-size: 11px; }
+.ctx-note { padding: 4px 10px 3px; font-size: 11px; opacity: .55; white-space: nowrap; cursor: default; user-select: none; }
 .ctx-sep { height: 1px; margin: 4px 6px; background: var(--menu-line); }

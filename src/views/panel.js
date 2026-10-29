@@ -34,8 +34,8 @@
   var ZH = /^zh/i.test((navigator.language || "") + "");
   // Panel copy: one table per language with the same keys. Values go in through textContent / setAttribute only.
   var I18N = {
-    en: { copy: "Copy", paste: "Paste", pasteLine: "Paste as Single Line", pasteRaw: "Paste with Line Breaks", selectAll: "Select All", clear: "Clear Scrollback", newTab: "New Tab", closeTab: "Close Tab", openLink: "Open Link", copyLink: "Copy Link Address", linkHint: "Hold \u2318 and click to open the link", copyFail: "Cannot copy: ", pasteFail: "Cannot paste: ", openFail: "Cannot open ", saveFail: "Cannot save font size: ", noBridge: "pluginBridge unavailable", startFail: "Failed to start terminal: ", exited: "process exited", dropped: "output dropped: this panel fell too far behind to keep it", superseded: "this terminal is now attached to another panel", backendLost: "terminal backend lost: ", newTabAria: "New terminal", newTabTip: "New terminal (\u2318T)" },
-    "zh-CN": { copy: "\u590d\u5236", paste: "\u7c98\u8d34", pasteLine: "\u7c98\u8d34\u4e3a\u5355\u884c", pasteRaw: "\u7c98\u8d34\uff08\u4fdd\u7559\u6362\u884c\uff09", selectAll: "\u5168\u9009", clear: "\u6e05\u9664\u6eda\u52a8\u7f13\u51b2", newTab: "\u65b0\u5efa\u6807\u7b7e", closeTab: "\u5173\u95ed\u6807\u7b7e", openLink: "\u6253\u5f00\u94fe\u63a5", copyLink: "\u590d\u5236\u94fe\u63a5\u5730\u5740", linkHint: "\u6309\u4f4f \u2318 \u70b9\u51fb\u94fe\u63a5\u624d\u4f1a\u6253\u5f00", copyFail: "\u65e0\u6cd5\u590d\u5236: ", pasteFail: "\u65e0\u6cd5\u7c98\u8d34: ", openFail: "\u65e0\u6cd5\u6253\u5f00 ", saveFail: "\u65e0\u6cd5\u4fdd\u5b58\u5b57\u4f53\u5927\u5c0f: ", noBridge: "\u63d2\u4ef6\u6865\u63a5\u4e0d\u53ef\u7528", startFail: "\u542f\u52a8\u7ec8\u7aef\u5931\u8d25: ", exited: "\u8fdb\u7a0b\u5df2\u9000\u51fa", dropped: "\u8f93\u51fa\u5df2\u4e22\u5f03\uff1a\u9762\u677f\u843d\u540e\u592a\u591a\uff0c\u65e0\u6cd5\u4fdd\u7559", superseded: "\u6b64\u7ec8\u7aef\u5df2\u8fde\u63a5\u5230\u53e6\u4e00\u4e2a\u9762\u677f", backendLost: "\u7ec8\u7aef\u540e\u7aef\u5df2\u65ad\u5f00: ", newTabAria: "\u65b0\u5efa\u7ec8\u7aef", newTabTip: "\u65b0\u5efa\u7ec8\u7aef\uff08\u2318T\uff09" },
+    en: { copy: "Copy", paste: "Paste", pasteLine: "Paste as Single Line", pasteRaw: "Paste with Line Breaks", selectAll: "Select All", clear: "Clear Scrollback", newTab: "New Tab", closeTab: "Close Tab", openLink: "Open Link", copyLink: "Copy Link Address", linkHint: "Hold \u2318 and click to open the link", copyFail: "Cannot copy: ", pasteFail: "Cannot paste: ", openFail: "Cannot open ", saveFail: "Cannot save font size: ", noBridge: "pluginBridge unavailable", startFail: "Failed to start terminal: ", exited: "process exited", dropped: "output dropped: this panel fell too far behind to keep it", superseded: "this terminal is now attached to another panel", backendLost: "terminal backend lost: ", newTabAria: "New terminal", newTabTip: "New terminal (\u2318T)", tmuxTip: "Runs inside tmux, session: ", detached: "detached from tmux, the session keeps running. Press Enter to reattach (the \u00d7 on the tab ends it)", reattachFail: "Cannot reattach: ", selHintMac: "Hold \u2325 to select text", selHintOther: "Hold Shift to select text" },
+    "zh-CN": { copy: "\u590d\u5236", paste: "\u7c98\u8d34", pasteLine: "\u7c98\u8d34\u4e3a\u5355\u884c", pasteRaw: "\u7c98\u8d34\uff08\u4fdd\u7559\u6362\u884c\uff09", selectAll: "\u5168\u9009", clear: "\u6e05\u9664\u6eda\u52a8\u7f13\u51b2", newTab: "\u65b0\u5efa\u6807\u7b7e", closeTab: "\u5173\u95ed\u6807\u7b7e", openLink: "\u6253\u5f00\u94fe\u63a5", copyLink: "\u590d\u5236\u94fe\u63a5\u5730\u5740", linkHint: "\u6309\u4f4f \u2318 \u70b9\u51fb\u94fe\u63a5\u624d\u4f1a\u6253\u5f00", copyFail: "\u65e0\u6cd5\u590d\u5236: ", pasteFail: "\u65e0\u6cd5\u7c98\u8d34: ", openFail: "\u65e0\u6cd5\u6253\u5f00 ", saveFail: "\u65e0\u6cd5\u4fdd\u5b58\u5b57\u4f53\u5927\u5c0f: ", noBridge: "\u63d2\u4ef6\u6865\u63a5\u4e0d\u53ef\u7528", startFail: "\u542f\u52a8\u7ec8\u7aef\u5931\u8d25: ", exited: "\u8fdb\u7a0b\u5df2\u9000\u51fa", dropped: "\u8f93\u51fa\u5df2\u4e22\u5f03\uff1a\u9762\u677f\u843d\u540e\u592a\u591a\uff0c\u65e0\u6cd5\u4fdd\u7559", superseded: "\u6b64\u7ec8\u7aef\u5df2\u8fde\u63a5\u5230\u53e6\u4e00\u4e2a\u9762\u677f", backendLost: "\u7ec8\u7aef\u540e\u7aef\u5df2\u65ad\u5f00: ", newTabAria: "\u65b0\u5efa\u7ec8\u7aef", newTabTip: "\u65b0\u5efa\u7ec8\u7aef\uff08\u2318T\uff09", tmuxTip: "\u8fd0\u884c\u5728 tmux \u4e2d\uff0c\u4f1a\u8bdd\uff1a", detached: "\u5df2\u4ece tmux \u8131\u79bb\uff0c\u4f1a\u8bdd\u4ecd\u5728\u540e\u53f0\u8fd0\u884c\u3002\u6309\u56de\u8f66\u91cd\u65b0\u63a5\u5165\uff08\u6807\u7b7e\u4e0a\u7684 \u00d7 \u4f1a\u7ed3\u675f\u5b83\uff09", reattachFail: "\u65e0\u6cd5\u91cd\u65b0\u63a5\u5165: ", selHintMac: "\u6309\u4f4f \u2325 \u62d6\u9009\u6587\u5b57", selHintOther: "\u6309\u4f4f Shift \u62d6\u9009\u6587\u5b57" },
   };
   var L = ZH ? I18N["zh-CN"] : I18N.en;
   function errText(e) { return (e && e.message) || e || "unknown error"; }
@@ -192,7 +192,16 @@
     document.querySelector(".app").classList.toggle("single", tabs.length < 2);
   }
 
-  function makeTab(id, replayB64, gen, nextSeq) {
+  // Badge in the corner (single tab) saying which backend the active tab is on.
+  function updateMode() {
+    var m = document.getElementById("mode");
+    if (!active) { m.textContent = ""; return; }
+    m.textContent = active.tmux ? "tmux" : "shell";
+    m.className = "mode" + (active.tmux ? " tmux" : "");
+    m.title = active.tmux ? L.tmuxTip + active.id : "";
+  }
+
+  function makeTab(id, replayB64, gen, nextSeq, isTmux) {
     var el = document.createElement("div");
     el.className = "term";
     hostEl.appendChild(el);
@@ -202,6 +211,9 @@
       lineHeight: 1.15,
       cursorBlink: true,
       scrollback: 10000,
+      // On macOS xterm only lets the mouse select while a program reports it (tmux mouse on, vim...) when
+      // Option is held and this is set; Shift does nothing there. Without it such a tab cannot be selected.
+      macOptionClickForcesSelection: true,
       allowProposedApi: true,
       theme: THEMES[base],
     });
@@ -243,17 +255,28 @@
     var x = document.createElement("span");
     x.className = "x";
     x.textContent = "\u00d7";
+    if (isTmux) {
+      var tag = document.createElement("span");
+      tag.className = "tag";
+      tag.textContent = "tmux";
+      tag.title = L.tmuxTip + id;
+      btn.appendChild(tag);
+    }
     btn.appendChild(label);
     btn.appendChild(x);
     tabsEl.insertBefore(btn, document.getElementById("add"));
 
-    var t = { id: id, gen: gen | 0, nextSeq: nextSeq | 0, term: term, fit: fit, el: el, btn: btn, alive: true, pending: "", sending: false, link: "" };
+    var t = { id: id, tmux: !!isTmux, gen: gen | 0, nextSeq: nextSeq | 0, term: term, fit: fit, el: el, btn: btn, alive: true, pending: "", sending: false, link: "" };
     tabs.push(t);
     btn.addEventListener("click", function (ev) {
       if (ev.target === x) closeTab(t); else activate(t);
     });
     term.onTitleChange(function (title) { label.textContent = (title || "shell").slice(-24); });
-    term.onData(function (d) { send(t, d); });
+    term.onData(function (d) {
+      // A tab whose tmux client left (prefix + d) takes no input; Enter brings the session back.
+      if (t.detached) { if (d === "\r") reattach(t); return; }
+      send(t, d);
+    });
     if (replayB64) term.write(b64ToBytes(replayB64));
     updateChrome();
     return t;
@@ -276,6 +299,27 @@
     }
   }
 
+  // The tmux session is still alive after prefix + d: start a new client for it. tmux repaints the whole
+  // screen, so the old text (including the hint) is cleared first.
+  async function reattach(t) {
+    if (!t.detached || t.attaching) return;
+    t.attaching = true;
+    try {
+      var a = await invoke("term.attach", { id: t.id, cols: t.term.cols, rows: t.term.rows });
+      t.detached = false;
+      t.gen = a.gen;
+      t.nextSeq = a.nextSeq;
+      t.alive = true;
+      t.btn.classList.remove("dead");
+      t.term.reset();
+      pollLoop(t);
+    } catch (e) {
+      flash(L.reattachFail + errText(e));
+    } finally {
+      t.attaching = false;
+    }
+  }
+
   function sendSize(t) {
     if (!t.alive) return;
     invoke("term.resize", { id: t.id, cols: t.term.cols, rows: t.term.rows }).catch(function () {});
@@ -292,12 +336,15 @@
 
   function activate(t) {
     active = t;
+    updateMode();
     tabs.forEach(function (o) {
       var on = o === t;
       o.el.classList.toggle("on", on);
       o.btn.classList.toggle("on", on);
     });
-    requestAnimationFrame(function () { refit(t); t.term.focus(); });
+    // refit only reports a size that differs from xterm's own previous one; a re-attached tmux client
+    // started from an estimate, so state the real size once whenever a tab comes to the front.
+    requestAnimationFrame(function () { refit(t); if (t.el.offsetParent !== null) sendSize(t); t.term.focus(); });
   }
 
   async function pollLoop(t) {
@@ -329,6 +376,20 @@
       }
       if (r.data) t.term.write(b64ToBytes(r.data));
       if (r.nextSeq > 0) t.nextSeq = r.nextSeq;
+      if (r.exited && r.gone && !r.error) {
+        // The shell inside the tmux session exited, so the session is gone: close the tab instead of
+        // leaving a dead one behind (closeTab opens a fresh tab when it was the last). With an error
+        // (tmux failed to start) the tab stays, so the message is not swallowed and no tab loop starts.
+        closeTab(t);
+        break;
+      }
+      if (t.tmux && r.exited && !r.gone && !r.error) {
+        // Only this client left; the tmux session lives on.
+        t.alive = false;
+        t.detached = true;
+        t.term.write("\r\n\x1b[2m[" + L.detached + "]\x1b[0m\r\n");
+        break;
+      }
       if (r.exited) {
         t.alive = false;
         t.btn.classList.add("dead");
@@ -344,7 +405,7 @@
     var size = estimateSize();
     try {
       var r = await invoke("term.open", { cols: size.cols, rows: size.rows });
-      var t = makeTab(r.id, null, r.gen, r.nextSeq);
+      var t = makeTab(r.id, null, r.gen, r.nextSeq, r.tmux);
       activate(t);
       await new Promise(function (res) { requestAnimationFrame(res); });
       refit(t);
@@ -387,19 +448,27 @@
   // Attach only the live sessions that belong to the current project; open a fresh one if there is none.
   async function restore() {
     var live = [];
+    var tmuxWanted = false;
     try {
       var l = await invoke("term.list");
       curKey = l.key || null;
+      tmuxWanted = !!l.tmuxWanted;
       live = l.sessions.filter(function (s) { return !s.exited && s.key === l.key; });
     } catch (e) {}
     for (var i = 0; i < live.length; i++) {
       try {
-        var a = await invoke("term.attach", { id: live[i].id });
-        var t = makeTab(live[i].id, a.replay, a.gen, a.nextSeq);
+        var size = estimateSize();
+        var a = await invoke("term.attach", { id: live[i].id, cols: size.cols, rows: size.rows });
+        var t = makeTab(live[i].id, a.replay, a.gen, a.nextSeq, live[i].tmux);
         pollLoop(t);
       } catch (e) {}
     }
-    if (tabs.length) { activate(tabs[0]); } else { await newTab(); }
+    // tmuxMode was switched on after this project's shells were opened: they stay (they may be running
+    // something), but the project gets a tmux tab too, and the panel lands on a tmux tab, not on an older
+    // plain shell that sits first.
+    var firstTmux = tabs.filter(function (t) { return t.tmux; })[0];
+    if (!tabs.length || (tmuxWanted && !firstTmux)) { await newTab(); return; }
+    activate(tmuxWanted ? firstTmux : tabs[0]);
   }
 
   // The panel can stay alive across project switches: notice the change and swap in that project's terminals.
@@ -500,6 +569,17 @@
       });
       ctxEl.appendChild(b);
     });
+    // Where a program owns the mouse (every tmux tab, vim...), a plain drag selects inside the program and
+    // not in this panel; say which key hands the selection back. Not shown for a plain shell.
+    var mt = t.term.modes && t.term.modes.mouseTrackingMode;
+    if (t.tmux || (mt && mt !== "none")) {
+      var note = document.createElement("div");
+      note.className = "ctx-note";
+      note.setAttribute("role", "note");
+      note.textContent = /Mac/i.test(navigator.platform || navigator.userAgent || "") ? L.selHintMac : L.selHintOther;
+      ctxEl.appendChild(document.createElement("div")).className = "ctx-sep";
+      ctxEl.appendChild(note);
+    }
     ctxEl.hidden = false;
     var w = ctxEl.offsetWidth, hgt = ctxEl.offsetHeight;
     ctxEl.style.left = Math.max(4, Math.min(x, window.innerWidth - w - 4)) + "px";
@@ -507,12 +587,23 @@
     var first = ctxEl.querySelector(".ctx-item:not(:disabled)");
     if (first) first.focus();
   }
+  // xterm turns a mouse press into escape sequences for the program as soon as tracking is on, before the
+  // contextmenu event exists. In a tmux tab, swallow the right button first (capture phase, ahead of
+  // xterm), so tmux neither sees it nor opens its own menu on top of ours.
+  function eatTmuxRightButton(e) {
+    if (e.button !== 2 || !active || !active.tmux || !active.el.contains(e.target)) return;
+    e.stopPropagation();
+  }
+  hostEl.addEventListener("mousedown", eatTmuxRightButton, true);
+  hostEl.addEventListener("mouseup", eatTmuxRightButton, true);
   hostEl.addEventListener("contextmenu", function (e) {
     var t = active;
     if (!t || !t.el.contains(e.target)) return;
-    // A program that asked for mouse reporting (vim, tmux...) owns the right button; Shift takes it back.
+    // A program that asked for mouse reporting (vim...) owns the right button; Shift takes it back. A tmux
+    // tab is the exception: tmux (mouse on) always asks for reporting, so the menu would never show. Its
+    // right button is ours (see the capture listeners below).
     var mm = t.term.modes && t.term.modes.mouseTrackingMode;
-    if (mm && mm !== "none" && !e.shiftKey) return;
+    if (!t.tmux && mm && mm !== "none" && !e.shiftKey) return;
     e.preventDefault();
     // The addon's hover state can outlive the link (output scrolled it away under a still mouse), so it
     // only counts while xterm is also showing the pointer cursor, which it does exactly over a link.

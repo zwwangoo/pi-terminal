@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "local.terminal",
   "name": "Terminal",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Embedded interactive terminal (xterm.js + PTY) for the work panel. Opens a login shell in the current workspace.",
   "author": "local",
   "license": "MIT",
@@ -21,7 +21,8 @@
       }
     ],
     "commands": [
-      { "id": "local.terminal.open", "title": "打开终端" }
+      { "id": "local.terminal.open", "title": "打开终端" },
+      { "id": "local.terminal.killTmux", "title": "结束所有 tmux 后台会话" }
     ],
     "settings": [
       {
@@ -52,6 +53,13 @@
         "type": "shortcut",
         "default": "Mod+T",
         "command": "local.terminal.open"
+      },
+      {
+        "key": "tmuxMode",
+        "title": "用 tmux 保持终端会话",
+        "description": "开启后，每个标签跑在插件专用的 tmux 服务里，重载插件、重启宿主后 shell 和里面的程序仍在，下次打开自动接回。需要已安装 tmux，找不到时新建标签会报错。会加载你自己的 ~/.tmux.conf，没有该文件时使用一份最小配置。在命令面板运行“结束所有 tmux 后台会话”可清理遗留的会话。",
+        "type": "boolean",
+        "default": false
       }
     ]
   },
@@ -60,13 +68,13 @@
     "en": {
       "name": "Side Terminal",
       "description": "Embedded interactive terminal (xterm.js + PTY) for the work panel. Opens a login shell in the current workspace.",
-      "safetyNotes": "Starts an interactive login shell (your $SHELL) inside a PTY via a bundled python3 relay, spawned with an argument array and no shell string. The shell has the same OS rights as you, and commands you type run unrestricted. The plugin sends no network requests, reads no credentials and writes no files of its own; the only thing it stores is the terminal font size you set with Cmd +/-, saved through the host into this plugin's own settings. Optional and off by default: the input-method switch changes the macOS input source to English while the terminal has keyboard focus and restores the previous one afterwards, by spawning the optional im-select helper. Clicking an http(s) link in the terminal only hands the URL to your default browser. The clipboard is read only when you paste (right-click menu or Cmd+V) and written only when you copy a selection; the clipboard text is never stored or sent anywhere except into the terminal you pasted into. Requires python3 on PATH."
+      "safetyNotes": "Starts an interactive login shell (your $SHELL) inside a PTY via a bundled python3 relay, spawned with an argument array and no shell string. The shell has the same OS rights as you, and commands you type run unrestricted. The plugin sends no network requests, reads no credentials and writes no files of its own; the only thing it stores is the terminal font size you set with Cmd +/-, saved through the host into this plugin's own settings. Optional and off by default: the input-method switch changes the macOS input source to English while the terminal has keyboard focus and restores the previous one afterwards, by spawning the optional im-select helper. Clicking an http(s) link in the terminal only hands the URL to your default browser. The clipboard is read only when you paste (right-click menu or Cmd+V) and written only when you copy a selection; the clipboard text is never stored or sent anywhere except into the terminal you pasted into. Optional and off by default (tmuxMode): when you turn on tmuxMode, each tab runs inside a tmux server the plugin starts on its own private socket (tmux -L pi-terminal; tmux loads your own ~/.tmux.conf, and only if you have none a small fixed config is piped over stdin), and closing the panel or unloading the plugin only detaches the tmux client - the shell and anything running in it keep running in the background, under your user, until you close the tab, exit the shell or run the 'End all tmux background sessions' command. The tmux binary is only ever run with an argument array. Requires python3 on PATH."
     },
     "zh-CN": {
       "name": "侧边终端工具",
       "description": "工作面板内置的交互式终端（xterm.js + PTY），在当前工作区打开登录 shell。",
-      "safetyNotes": "通过随插件附带的 python3 中继在 PTY 中启动交互式登录 shell（使用 $SHELL），以参数数组方式启动，不拼接 shell 字符串。该 shell 与你拥有相同的系统权限，你输入的命令不受限制。插件不发起网络请求、不读取凭据，自己不写入文件；唯一会保存的是你用 ⌘+ / ⌘- 调整的终端字号，由宿主存进本插件自己的设置里。输入法切换为可选功能，默认关闭：开启后终端获得键盘焦点时会把 macOS 输入法切到英文，离开时恢复原输入法，通过调用可选的 im-select 工具实现。点击终端中的 http(s) 链接只会把网址交给默认浏览器。剪贴板仅在你粘贴（右键菜单或 ⌘V）时读取、在你复制选区时写入，内容不会被保存，也不会发送到你粘贴的那个终端以外的任何地方。需要 PATH 中有 python3。"
+      "safetyNotes": "通过随插件附带的 python3 中继在 PTY 中启动交互式登录 shell（使用 $SHELL），以参数数组方式启动，不拼接 shell 字符串。该 shell 与你拥有相同的系统权限，你输入的命令不受限制。插件不发起网络请求、不读取凭据，自己不写入文件；唯一会保存的是你用 ⌘+ / ⌘- 调整的终端字号，由宿主存进本插件自己的设置里。输入法切换为可选功能，默认关闭：开启后终端获得键盘焦点时会把 macOS 输入法切到英文，离开时恢复原输入法，通过调用可选的 im-select 工具实现。点击终端中的 http(s) 链接只会把网址交给默认浏览器。剪贴板仅在你粘贴（右键菜单或 ⌘V）时读取、在你复制选区时写入，内容不会被保存，也不会发送到你粘贴的那个终端以外的任何地方。可选功能，默认关闭（tmuxMode）：开启 tmuxMode 后，每个标签会跑在插件自己启动的 tmux 服务里（私有 socket：tmux -L pi-terminal；由 tmux 加载你自己的 ~/.tmux.conf，仅在你没有该文件时才通过标准输入传入一份固定的最小配置）。关闭面板或卸载插件只会让 tmux 客户端脱离，shell 及其中运行的程序会继续在后台以你的身份运行，直到你关闭标签、退出 shell，或运行“结束所有 tmux 后台会话”命令。tmux 始终以参数数组方式调用。需要 PATH 中有 python3。"
     }
   },
-  "safetyNotes": "Starts an interactive login shell (your $SHELL) inside a PTY via a bundled python3 relay (spawned with an argument array, no shell string). The shell has the same OS rights as you; commands you type run unrestricted. The plugin sends no network requests, reads no credentials and writes no files of its own; the only thing it stores is the terminal font size you set with Cmd +/-, saved through the host into this plugin's own settings. Off by default: when you turn on the input-method switch in the plugin's settings, the terminal panel switches the macOS input source to English while it holds keyboard focus and puts the previous one back when focus leaves, by spawning the optional im-select helper (argument array, no shell string, no Accessibility or Input Monitoring grant). The panel is a context-isolated work-panel view that talks to the host bridge (term.* and ime.* channels, plus shell.openExternal when you click an http(s) link in the terminal, which only hands the URL to your default browser, and clipboard.readText / clipboard.writeText only when you paste or copy). Requires python3 on PATH (macOS ships one)."
+  "safetyNotes": "Starts an interactive login shell (your $SHELL) inside a PTY via a bundled python3 relay (spawned with an argument array, no shell string). The shell has the same OS rights as you; commands you type run unrestricted. The plugin sends no network requests, reads no credentials and writes no files of its own; the only thing it stores is the terminal font size you set with Cmd +/-, saved through the host into this plugin's own settings. Off by default: when you turn on the input-method switch in the plugin's settings, the terminal panel switches the macOS input source to English while it holds keyboard focus and puts the previous one back when focus leaves, by spawning the optional im-select helper (argument array, no shell string, no Accessibility or Input Monitoring grant). The panel is a context-isolated work-panel view that talks to the host bridge (term.* and ime.* channels, plus shell.openExternal when you click an http(s) link in the terminal, which only hands the URL to your default browser, and clipboard.readText / clipboard.writeText only when you paste or copy). Optional and off by default (tmuxMode): when you turn on tmuxMode, each tab runs inside a tmux server the plugin starts on its own private socket (tmux -L pi-terminal; tmux loads your own ~/.tmux.conf, and only if you have none a small fixed config is piped over stdin), and closing the panel or unloading the plugin only detaches the tmux client - the shell and anything running in it keep running in the background, under your user, until you close the tab, exit the shell or run the 'End all tmux background sessions' command. The tmux binary is only ever run with an argument array. Requires python3 on PATH (macOS ships one)."
 }

@@ -71,29 +71,186 @@ async function currentWorkspace() {
   return { cwd: "", key: wsKey(null) };
 }
 
-async function openSession({ cols, rows }) {
-  const { cwd, key } = await currentWorkspace();
-  const id = "t" + ++seq;
-  const c = Math.max(2, Math.min(1000, cols | 0 || 80));
-  const r = Math.max(2, Math.min(1000, rows | 0 || 24));
-  const proc = spawn("python3", ["-c", RELAY_SRC, cwd, String(c), String(r)], {
-    stdio: ["pipe", "pipe", "pipe", "pipe"],
-    env: { PATH: "/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin" },
+// ---- tmux (optional persistence) --------------------------------------------
+//
+// With tmuxMode on, every tab is a session on a private tmux server (own socket; it loads the user's
+// tmux config, with a minimal fallback in relay.py when there is none). The relay only runs the
+// attaching tmux client, so closing the panel or unloading the plugin just detaches it and the shell
+// keeps running; term.list finds such sessions again by name. Off by default: it is the only mode in
+// which a shell outlives this process.
+const TMUX_PREFIX = "pit_";
+// tmux prints control characters (a tab) as "_" in -F output, so fields are split on printable text.
+const TMUX_SEP = "|~|";
+const TMUX_CANDIDATES = ["/opt/homebrew/bin/tmux", "/usr/local/bin/tmux", "/opt/local/bin/tmux", "/usr/bin/tmux"];
+const TMUX_TIMEOUT_MS = 5000;
+let tmuxBin; // undefined: not resolved yet, null: not found (rechecked after TMUX_BIN_RETRY_MS)
+let tmuxBinMissAt = 0;
+const TMUX_BIN_RETRY_MS = 5000;
+
+// Environment for the relay and for tmux calls. Tests point HOME at a scratch directory (so the real
+// ~/.tmux.conf is not picked up); normally HOME is left to the relay, which takes it from the passwd entry.
+function relayEnv(pathVar) {
+  const env = { PATH: pathVar };
+  if (process.env.PI_TERMINAL_TMUX_HOME) env.HOME = process.env.PI_TERMINAL_TMUX_HOME;
+  return env;
+}
+
+function tmuxSocket() {
+  return process.env.PI_TERMINAL_TMUX_SOCK || "pi-terminal";
+}
+
+function tmuxBinary() {
+  if (tmuxBin) return tmuxBin;
+  if (tmuxBin === null && Date.now() - tmuxBinMissAt < TMUX_BIN_RETRY_MS) return null;
+  tmuxBin = null;
+  tmuxBinMissAt = Date.now();
+  if (process.platform === "win32") return tmuxBin;
+  // An explicit override is the only candidate: it must never be silently replaced by another binary.
+  const override = process.env.PI_TERMINAL_TMUX;
+  for (const p of override ? [override] : TMUX_CANDIDATES) {
+    try {
+      fs.accessSync(p, fs.constants.X_OK);
+      tmuxBin = p;
+      break;
+    } catch (_) {
+      /* try the next one */
+    }
+  }
+  return tmuxBin;
+}
+
+// The tmuxMode switch (default off). Test builds stored "on" / "auto" as text; those still count as on.
+async function tmuxOn() {
+  const v = (await rawSettings()).tmuxMode;
+  return v === true || v === "on" || v === "auto";
+}
+
+// One tmux call against the private server; resolves {ok, out, err} and never rejects on a non-zero exit.
+function tmuxRun(args) {
+  return new Promise((resolve, reject) => {
+    const bin = tmuxBinary();
+    if (!bin) return reject(new Error("tmux not found"));
+    let out = "", err = "", settled = false, child;
+    const done = (r) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(r);
+    };
+    const timer = setTimeout(() => {
+      try { if (child) child.kill("SIGKILL"); } catch (_) {}
+      done({ ok: false, out, err: "tmux timed out" });
+    }, TMUX_TIMEOUT_MS);
+    timer.unref?.();
+    try {
+      // -u: assume a UTF-8 terminal, or tmux replaces non-ASCII text (a Chinese project path) with "_".
+      child = spawn(bin, ["-u", "-L", tmuxSocket(), ...args], {
+        stdio: ["ignore", "pipe", "pipe"],
+        env: relayEnv("/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"),
+      });
+    } catch (e) {
+      clearTimeout(timer);
+      return reject(e);
+    }
+    child.stdout.on("data", (d) => { out += d.toString("utf8"); });
+    child.stderr.on("data", (d) => { err += d.toString("utf8"); });
+    child.on("error", (e) => done({ ok: false, out, err: String((e && e.message) || e) }));
+    child.on("close", (code) => done({ ok: code === 0, out, err: err.trim() }));
   });
-  const s = {
-    id, proc, cwd, key,
+}
+
+// tmux session names may not contain "." or ":", so the project key is hashed into the name; the exact
+// key is stored on the session (@pi_key) and read back by discoverTmux.
+function tmuxName(key, n) {
+  const h = require("node:crypto").createHash("sha1").update(String(key)).digest("hex").slice(0, 8);
+  return TMUX_PREFIX + h + "_" + Date.now().toString(36) + n.toString(36);
+}
+
+function tmuxSpec(name, key, create) {
+  const bin = tmuxBinary();
+  if (!bin) throw new Error("tmux mode is on but tmux was not found (install tmux or turn the setting off)");
+  return { tmux: bin, sock: tmuxSocket(), name, key, create };
+}
+
+async function tmuxHas(name) {
+  try {
+    return (await tmuxRun(["has-session", "-t", "=" + name])).ok;
+  } catch (_) {
+    return false;
+  }
+}
+
+// Whether leftover sessions were looked up since the switch last went on (term.list does it, once per
+// off -> on change). With the switch off they stay invisible; killTmux still removes them.
+let discovered = false;
+
+// Register the sessions an earlier run left on the tmux server. They have no relay yet: the first
+// term.attach starts one.
+async function discoverTmux() {
+  if (!tmuxBinary()) return;
+  discovered = true;
+  const r = await tmuxRun(["list-sessions", "-F", ["#{session_name}", "#{@pi_key}", "#{session_path}"].join(TMUX_SEP)]);
+  if (!r.ok) return; // no server running: nothing survived
+  for (const line of r.out.split("\n")) {
+    const [name, key, cwd] = line.split(TMUX_SEP);
+    if (!name || !name.startsWith(TMUX_PREFIX) || sessions.has(name)) continue;
+    sessions.set(name, newSession(name, cwd || "", key || "", 80, 24, true));
+  }
+}
+
+async function killAllTmux() {
+  if (tmuxBinary()) await tmuxRun(["kill-server"]);
+  // Sessions with a relay notice by themselves (the client exits, has-session fails). The ones that
+  // were only discovered have no relay to notice anything, so drop them here.
+  for (const [id, s] of [...sessions]) if (s.tmux && !s.proc) closeSession(id, false);
+}
+
+// ---- sessions ------------------------------------------------------------------
+
+function clampDim(v, fallback) {
+  return Math.max(2, Math.min(1000, (v | 0) || fallback || 80));
+}
+
+function newSession(id, cwd, key, cols, rows, tmux) {
+  return {
+    id, proc: null, cwd, key, cols, rows, tmux: !!tmux,
+    gone: false, // tmux only: the tmux session itself no longer exists
     ring: new RingBuffer(RING_MAX),
     cursor: 1, // seq the current reader wants next
     lastPollAt: 0,
     exited: false, exitCode: null, err: "",
     waiters: [], paused: false, pauseTimer: null, gen: 0,
   };
-  sessions.set(id, s);
+}
+
+/**
+ * (Re)start the relay process of a session with a fresh output ring. Handlers compare against the
+ * process they were made for, so a client that is being replaced cannot touch the new state.
+ */
+function startRelay(s, cols, rows, spec) {
+  stopRelay(s);
+  s.cols = cols;
+  s.rows = rows;
+  s.ring = new RingBuffer(RING_MAX);
+  s.cursor = 1;
+  s.lastPollAt = 0;
+  s.exited = false;
+  s.exitCode = null;
+  s.err = "";
+  s.gone = false;
+  const args = ["-c", RELAY_SRC, s.cwd, String(cols), String(rows)];
+  if (spec) args.push(JSON.stringify(spec));
+  const proc = spawn("python3", args, {
+    stdio: ["pipe", "pipe", "pipe", "pipe"],
+    env: relayEnv("/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin"),
+  });
+  s.proc = proc;
   proc.stdout.on("data", (d) => {
+    if (s.proc !== proc) return;
     s.ring.push(d);
     // Back-pressure is measured against the reader's position, not against a byte queue: pause only
     // when somebody is actually reading. With no reader (panel closed, another project open) the pty
-    // keeps running and the ring trims — that is what lets a background shell survive.
+    // keeps running and the ring trims - that is what lets a background shell survive.
     if (!s.paused && readerActive(s) && s.ring.bytesAfter(s.cursor) > PAUSE_ABOVE) {
       s.paused = true;
       proc.stdout.pause();
@@ -102,22 +259,49 @@ async function openSession({ cols, rows }) {
     wakeAll(s);
   });
   proc.stderr.on("data", (d) => {
+    if (s.proc !== proc) return;
     s.err = (s.err + d.toString("utf8")).slice(-2000);
   });
   proc.stdin.on("error", () => {});
   proc.stdio[3].on("error", () => {});
   proc.on("error", (e) => {
+    if (s.proc !== proc) return;
     s.exited = true;
     s.exitCode = -1;
     s.err = String(e && e.message ? e.message : e);
     wakeAll(s);
   });
-  proc.on("close", (code) => {
+  proc.on("close", async (code) => {
+    if (s.proc !== proc) return;
+    // A tmux client also exits when it is merely detached (prefix + d). Find out whether the session
+    // survived before announcing it, so term.list does not hide a shell that is still alive.
+    if (s.tmux) {
+      const alive = await tmuxHas(s.id);
+      if (s.proc !== proc) return;
+      s.gone = !alive;
+    }
     s.exited = true;
     s.exitCode = code;
     wakeAll(s);
   });
-  return { id, cwd, key, gen: 0 };
+}
+
+async function openSession({ cols, rows }) {
+  const { cwd, key } = await currentWorkspace();
+  const c = clampDim(cols, 80);
+  const r = clampDim(rows, 24);
+  const n = ++seq;
+  let id = "t" + n;
+  let spec = null;
+  if (await tmuxOn()) {
+    // On means tmux: a missing binary is an error (thrown by tmuxSpec), not a fall back to a plain shell.
+    id = tmuxName(key, n);
+    spec = tmuxSpec(id, key, true);
+  }
+  const s = newSession(id, cwd, key, c, r, !!spec);
+  sessions.set(id, s);
+  startRelay(s, c, r, spec);
+  return { id, cwd, key, gen: 0, tmux: !!spec };
 }
 
 function need(id) {
@@ -153,13 +337,19 @@ function armPauseTimer(s) {
   s.pauseTimer.unref?.();
 }
 
+/** Let a paused pty run again. */
+function resumeProc(s) {
+  if (!s.paused) return;
+  s.paused = false;
+  if (s.pauseTimer) { clearTimeout(s.pauseTimer); s.pauseTimer = null; }
+  try { s.proc.stdout.resume(); } catch (_) {}
+}
+
 /** Resume a paused pty once the reader has caught up, or once the reader is gone. */
 function maybeResume(s) {
   if (!s.paused) return;
   if (readerActive(s) && s.ring.bytesAfter(s.cursor) >= RESUME_BELOW) return;
-  s.paused = false;
-  if (s.pauseTimer) { clearTimeout(s.pauseTimer); s.pauseTimer = null; }
-  try { s.proc.stdout.resume(); } catch (_) {}
+  resumeProc(s);
 }
 
 /**
@@ -202,17 +392,34 @@ async function poll(s, gen, from) {
     truncated: r.truncated,
     exited: s.exited && s.cursor > s.ring.latestSeq,
     exitCode: s.exitCode,
+    // tmux only: the session itself is gone (the shell exited), not just this client (prefix + d)
+    gone: s.gone,
     error: s.exited ? s.err : "",
   };
 }
 
-function closeSession(id) {
+/** Stop this session's relay process. For a tmux session that only detaches the client. */
+function stopRelay(s) {
+  const proc = s.proc;
+  s.proc = null;
+  if (s.pauseTimer) { clearTimeout(s.pauseTimer); s.pauseTimer = null; }
+  s.paused = false;
+  if (!proc) return;
+  try { proc.stdin.end(); } catch (_) {}
+  try { proc.kill("SIGHUP"); } catch (_) {}
+  setTimeout(() => { try { proc.kill("SIGKILL"); } catch (_) {} }, 1500).unref?.();
+}
+
+/**
+ * kill=true ends the session: the shell dies, and so does its tmux session. kill=false only lets go
+ * of it (plugin unload), which for a tmux session leaves the shell running on the tmux server.
+ */
+function closeSession(id, kill) {
   const s = sessions.get(id);
   if (!s) return;
   sessions.delete(id);
-  try { s.proc.stdin.end(); } catch (_) {}
-  try { s.proc.kill("SIGHUP"); } catch (_) {}
-  setTimeout(() => { try { s.proc.kill("SIGKILL"); } catch (_) {} }, 1500).unref?.();
+  if (s.tmux && kill) tmuxRun(["kill-session", "-t", "=" + s.id]).catch(() => {});
+  stopRelay(s);
   wakeAll(s);
 }
 
@@ -466,15 +673,19 @@ async function onPanelInvoke(channel, p) {
       const s = need(p.id);
       s.gen++;
       wakeAll(s); // release any stale long-poll from the previous owner
+      if (s.tmux) {
+        // The screen lives in tmux, not in our ring: start a fresh client and let tmux repaint it.
+        // -d on the attach also detaches the previous client, so the window follows this panel's size.
+        const cols = clampDim(p.cols, s.cols), rows = clampDim(p.rows, s.rows);
+        startRelay(s, cols, rows, tmuxSpec(s.id, "", false));
+        s.lastPollAt = Date.now();
+        return { replay: "", gen: s.gen, nextSeq: s.ring.nextSeq, tmux: true };
+      }
       // A new reader starts at the oldest retained output: the replay below carries everything the
       // ring still holds, and nextSeq says where to resume so no output is served twice.
       s.cursor = s.ring.earliestSeq;
       s.lastPollAt = Date.now();
-      if (s.paused) {
-        s.paused = false;
-        if (s.pauseTimer) { clearTimeout(s.pauseTimer); s.pauseTimer = null; }
-        try { s.proc.stdout.resume(); } catch (_) {}
-      }
+      resumeProc(s);
       const r = s.ring.read(s.cursor, RING_MAX);
       s.cursor = r.nextSeq;
       return {
@@ -485,29 +696,36 @@ async function onPanelInvoke(channel, p) {
     }
     case "term.list": {
       const cur = await currentWorkspace();
+      const on = await tmuxOn();
+      if (!on) discovered = false;
+      else if (!discovered) await discoverTmux().catch(() => {});
       return {
         key: cur.key,
-        sessions: [...sessions.values()].map((s) => ({ id: s.id, key: s.key, exited: s.exited })),
+        // New tabs are tmux ones right now (mode on and a tmux binary exists). The panel uses it to move a
+        // project that only has plain shells (opened while the mode was off) over to tmux.
+        tmuxWanted: on && !!tmuxBinary(),
+        // For a tmux session "exited" means the session is gone, not that this client left: a session
+        // detached with the tmux prefix is still alive and gets re-attached.
+        sessions: [...sessions.values()].map((s) => ({ id: s.id, key: s.key, exited: s.tmux ? s.gone : s.exited, tmux: !!s.tmux })),
       };
     }
     case "term.write": {
       const s = need(p.id);
-      if (!s.exited && typeof p.data === "string") s.proc.stdin.write(Buffer.from(p.data, "utf8"));
+      if (!s.exited && s.proc && typeof p.data === "string") s.proc.stdin.write(Buffer.from(p.data, "utf8"));
       return { ok: true };
     }
     case "term.resize": {
       const s = need(p.id);
-      if (!s.exited) {
-        const c = Math.max(2, Math.min(1000, p.cols | 0));
-        const r = Math.max(2, Math.min(1000, p.rows | 0));
-        s.proc.stdio[3].write(`R ${c} ${r}\n`);
-      }
+      const c = clampDim(p.cols, s.cols), r = clampDim(p.rows, s.rows);
+      s.cols = c;
+      s.rows = r;
+      if (!s.exited && s.proc) s.proc.stdio[3].write(`R ${c} ${r}\n`);
       return { ok: true };
     }
     case "term.poll":
       return poll(need(p.id), p.gen | 0, p.from);
     case "term.close":
-      closeSession(p.id);
+      closeSession(p.id, true); // the user closed the tab: that ends a tmux session too
       return { ok: true };
     default:
       throw new Error("unsupported panel channel: " + channel);
@@ -540,6 +758,21 @@ function registerOpenCommand() {
   });
 }
 
+// Ends every session on the plugin's private tmux server, including ones no panel shows any more
+// (another project's, or left over from an earlier run). Works whatever tmuxMode is, so turning the
+// feature off never strands background shells.
+const COMMAND_KILL_TMUX = "local.terminal.killTmux";
+
+function registerKillTmuxCommand() {
+  return pi.commands.register({
+    id: COMMAND_KILL_TMUX,
+    title: "结束所有 tmux 后台会话",
+    category: "terminal",
+    keywords: ["tmux", "kill", "终端", "结束"],
+    run: async () => { try { await killAllTmux(); } catch (_) {} },
+  });
+}
+
 async function onLoad() {
   try {
     if (typeof pi !== "undefined" && pi.events && typeof pi.events.on === "function") {
@@ -550,6 +783,7 @@ async function onLoad() {
     /* no event API: the TTL read still works */
   }
   await registerOpenCommand();
+  await registerKillTmuxCommand();
 }
 
 async function onUnload() {
@@ -557,7 +791,8 @@ async function onUnload() {
     if (settingsLive) pi.events.off(SETTINGS_EVENT, onSettingsChanged);
   } catch (_) {}
   settingsLive = false;
-  for (const id of [...sessions.keys()]) closeSession(id);
+  // detach, not kill: a tmux-backed shell is meant to outlive the plugin process.
+  for (const id of [...sessions.keys()]) closeSession(id, false);
   // Never leave the user stuck on the English layout because the plugin went away: let any queued
   // edge finish first, then put the remembered source back.
   await imeChain.catch(() => {});
