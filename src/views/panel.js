@@ -6,8 +6,14 @@
   var statusEl = document.getElementById("status");
   var tabs = []; // {id, gen, term, fit, el, btn, alive, pending, sending}
   var active = null;
-  var curKey = null; // project key the visible tabs belong to (from the backend)
-  var switching = false;
+  var curKey = ""; // key (conversation, else project) the visible tabs belong to, as the backend reports it
+  var groups = {}; // key -> { tabs, active, at }: other conversations' terminals, kept off screen
+  var MAX_GROUPS = 6;
+  function allTabs() {
+    var all = tabs.slice();
+    Object.keys(groups).forEach(function (k) { all = all.concat(groups[k].tabs); });
+    return all;
+  }
 
   function invoke(ch, p) {
     return bridge.invoke(ch, p || {});
@@ -104,7 +110,7 @@
     n = Math.max(FONT_MIN, Math.min(FONT_MAX, n));
     if (n === fontSize) return;
     fontSize = n;
-    tabs.forEach(function (t) { t.term.options.fontSize = n; });
+    allTabs().forEach(function (t) { t.term.options.fontSize = n; });
     refit(active);
     if (persist) saveFontSoon(n);
   }
@@ -146,7 +152,7 @@
     }
     if (cfg.fontFamily !== prev.fontFamily) {
       var fam = familyOf(cfg.fontFamily);
-      tabs.forEach(function (t) { t.term.options.fontFamily = fam; });
+      allTabs().forEach(function (t) { t.term.options.fontFamily = fam; });
       refit(active);
     }
   }
@@ -185,7 +191,7 @@
     }
     base = b;
     document.documentElement.dataset.base = b;
-    tabs.forEach(function (t) { t.term.options.theme = THEMES[b]; });
+    allTabs().forEach(function (t) { t.term.options.theme = THEMES[b]; });
   }
 
   function updateChrome() {
@@ -348,63 +354,72 @@
   }
 
   async function pollLoop(t) {
-    var fails = 0;
-    while (t.alive) {
-      var r;
-      // Ask for the chunk after the last one this screen rendered. The backend keeps whole chunks and
-      // answers truncated when that position is already gone, instead of handing back a shorter
-      // stream that looks like the whole output.
-      var req = { id: t.id, gen: t.gen };
-      if (t.nextSeq > 0) req.from = t.nextSeq;
-      try {
-        r = await invoke("term.poll", req);
-        fails = 0;
-      } catch (e) {
-        if (++fails > 3) { t.alive = false; t.term.write("\r\n\x1b[31m[" + L.backendLost + (e && e.message || e) + "]\x1b[0m\r\n"); break; }
-        await new Promise(function (res) { setTimeout(res, 300); });
-        continue;
+    // One loop per tab: resuming a parked tab while its old poll is still in flight just lets that poll
+    // carry on, instead of starting a second reader that would fetch the same block twice.
+    if (t.polling) return;
+    t.polling = true;
+    try {
+      var fails = 0;
+      while (t.alive && !t.parked) {
+        var r;
+        // Ask for the chunk after the last one this screen rendered. The backend keeps whole chunks and
+        // answers truncated when that position is already gone, instead of handing back a shorter
+        // stream that looks like the whole output.
+        var req = { id: t.id, gen: t.gen };
+        if (t.nextSeq > 0) req.from = t.nextSeq;
+        try {
+          r = await invoke("term.poll", req);
+          fails = 0;
+        } catch (e) {
+          if (++fails > 3) { t.alive = false; t.term.write("\r\n\x1b[31m[" + L.backendLost + (e && e.message || e) + "]\x1b[0m\r\n"); break; }
+          await new Promise(function (res) { setTimeout(res, 300); });
+          continue;
+        }
+        if (!t.alive) break; // tab closed while this poll was in flight
+        // A tab parked while its poll was in flight still takes what came back (the loop stops after it).
+        if (r.superseded) {
+          t.alive = false;
+          t.btn.classList.add("dead");
+          t.term.write("\r\n\x1b[2m[" + L.superseded + "]\x1b[0m\r\n");
+          break;
+        }
+        if (r.truncated) {
+          t.term.write("\r\n\x1b[2m[" + L.dropped + "]\x1b[0m\r\n");
+        }
+        if (r.data) t.term.write(b64ToBytes(r.data));
+        if (r.nextSeq > 0) t.nextSeq = r.nextSeq;
+        if (r.exited && r.gone && !r.error) {
+          // The shell inside the tmux session exited, so the session is gone: close the tab instead of
+          // leaving a dead one behind (closeTab opens a fresh tab when it was the last). With an error
+          // (tmux failed to start) the tab stays, so the message is not swallowed and no tab loop starts.
+          closeTab(t);
+          break;
+        }
+        if (t.tmux && r.exited && !r.gone && !r.error) {
+          // Only this client left; the tmux session lives on.
+          t.alive = false;
+          t.detached = true;
+          t.term.write("\r\n\x1b[2m[" + L.detached + "]\x1b[0m\r\n");
+          break;
+        }
+        if (r.exited) {
+          t.alive = false;
+          t.btn.classList.add("dead");
+          var msg = "\r\n\x1b[2m[" + L.exited + (r.exitCode != null ? " (" + r.exitCode + ")" : "") + "]\x1b[0m\r\n";
+          if (r.error) msg += "\x1b[31m" + r.error.replace(/\n/g, "\r\n") + "\x1b[0m\r\n";
+          t.term.write(msg);
+          break;
+        }
       }
-      if (!t.alive) break; // tab closed or project switched while this poll was in flight
-      if (r.superseded) {
-        t.alive = false;
-        t.btn.classList.add("dead");
-        t.term.write("\r\n\x1b[2m[" + L.superseded + "]\x1b[0m\r\n");
-        break;
-      }
-      if (r.truncated) {
-        t.term.write("\r\n\x1b[2m[" + L.dropped + "]\x1b[0m\r\n");
-      }
-      if (r.data) t.term.write(b64ToBytes(r.data));
-      if (r.nextSeq > 0) t.nextSeq = r.nextSeq;
-      if (r.exited && r.gone && !r.error) {
-        // The shell inside the tmux session exited, so the session is gone: close the tab instead of
-        // leaving a dead one behind (closeTab opens a fresh tab when it was the last). With an error
-        // (tmux failed to start) the tab stays, so the message is not swallowed and no tab loop starts.
-        closeTab(t);
-        break;
-      }
-      if (t.tmux && r.exited && !r.gone && !r.error) {
-        // Only this client left; the tmux session lives on.
-        t.alive = false;
-        t.detached = true;
-        t.term.write("\r\n\x1b[2m[" + L.detached + "]\x1b[0m\r\n");
-        break;
-      }
-      if (r.exited) {
-        t.alive = false;
-        t.btn.classList.add("dead");
-        var msg = "\r\n\x1b[2m[" + L.exited + (r.exitCode != null ? " (" + r.exitCode + ")" : "") + "]\x1b[0m\r\n";
-        if (r.error) msg += "\x1b[31m" + r.error.replace(/\n/g, "\r\n") + "\x1b[0m\r\n";
-        t.term.write(msg);
-        break;
-      }
+    } finally {
+      t.polling = false;
     }
   }
 
   async function newTab() {
     var size = estimateSize();
     try {
-      var r = await invoke("term.open", { cols: size.cols, rows: size.rows });
+      var r = await invoke("term.open", { cols: size.cols, rows: size.rows, key: curKey });
       var t = makeTab(r.id, null, r.gen, r.nextSeq, r.tmux);
       activate(t);
       await new Promise(function (res) { requestAnimationFrame(res); });
@@ -427,63 +442,120 @@
     t.term.dispose();
     t.el.remove();
     t.btn.remove();
-    tabs.splice(tabs.indexOf(t), 1);
+    var i = tabs.indexOf(t);
+    if (i < 0) {
+      // Closed while its conversation is off screen (a tmux session that ended in the background): take it
+      // out of the cache, and leave the visible tabs alone.
+      Object.keys(groups).forEach(function (k) {
+        var j = groups[k].tabs.indexOf(t);
+        if (j < 0) return;
+        groups[k].tabs.splice(j, 1);
+        if (!groups[k].tabs.length) delete groups[k];
+      });
+      return;
+    }
+    tabs.splice(i, 1);
     updateChrome();
     if (!tabs.length) newTab();
     else if (active === t) activate(tabs[tabs.length - 1]);
   }
 
-  // Drop the visible tabs without killing their shells (they stay in the backend for their project).
-  function detachAll() {
-    tabs.forEach(function (t) {
+  // Take the visible tabs off screen without killing their shells or their xterm instances. They are kept
+  // per key, so coming back to a conversation is a show/hide plus a resume of the poll from where it
+  // stopped: no re-attach and no replay of the whole buffer. Output that arrived meanwhile is still in
+  // the backend ring and is read on resume.
+  function disposeTabs(list) {
+    list.forEach(function (t) {
       t.alive = false;
       t.term.dispose();
       t.el.remove();
       t.btn.remove();
     });
+  }
+  function park() {
+    tabs.forEach(function (t) {
+      t.parked = true;
+      t.el.classList.remove("on");
+      t.btn.classList.remove("on");
+      t.btn.style.display = "none";
+    });
+    if (tabs.length) groups[curKey] = { tabs: tabs, active: active, at: Date.now() };
     tabs = [];
     active = null;
+    // Bounded: the oldest cached conversations are released. Their shells keep running in the backend, so
+    // coming back to one of those costs an attach + replay, like before.
+    var keys = Object.keys(groups).sort(function (a, b) { return groups[a].at - groups[b].at; });
+    while (keys.length > MAX_GROUPS) {
+      var k = keys.shift();
+      disposeTabs(groups[k].tabs);
+      delete groups[k];
+    }
   }
 
-  // Attach only the live sessions that belong to the current project; open a fresh one if there is none.
-  async function restore() {
-    var live = [];
-    var tmuxWanted = false;
-    try {
-      var l = await invoke("term.list");
-      curKey = l.key || null;
-      tmuxWanted = !!l.tmuxWanted;
-      live = l.sessions.filter(function (s) { return !s.exited && s.key === l.key; });
-    } catch (e) {}
-    for (var i = 0; i < live.length; i++) {
+  // Show the terminals of the key the backend reports (`l` is a term.list / term.watch answer).
+  async function enter(l) {
+    park();
+    curKey = l.key;
+    var live = {};
+    l.sessions.forEach(function (s) { if (!s.exited && s.key === l.key) live[s.id] = s; });
+    var g = groups[l.key];
+    var preferred = null;
+    if (g) {
+      delete groups[l.key];
+      // A cached tab stays if its session is still alive and the tab can be used: reading, or a tmux tab
+      // whose client left (prefix + d) and waits for Enter. Anything else is released and, if its session
+      // lives on, attached afresh below.
+      var keep = [], drop = [];
+      g.tabs.forEach(function (t) { (live[t.id] && (t.alive || t.detached) ? keep : drop).push(t); });
+      disposeTabs(drop);
+      tabs = keep;
+      keep.forEach(function (t) {
+        t.parked = false;
+        t.btn.style.display = "";
+        if (t.alive) pollLoop(t);
+      });
+      if (keep.indexOf(g.active) >= 0) preferred = g.active;
+    }
+    var have = {};
+    tabs.forEach(function (t) { have[t.id] = true; });
+    for (var id in live) {
+      if (have[id]) continue;
       try {
         var size = estimateSize();
-        var a = await invoke("term.attach", { id: live[i].id, cols: size.cols, rows: size.rows });
-        var t = makeTab(live[i].id, a.replay, a.gen, a.nextSeq, live[i].tmux);
-        pollLoop(t);
+        var a = await invoke("term.attach", { id: id, cols: size.cols, rows: size.rows });
+        var t2 = makeTab(id, a.replay, a.gen, a.nextSeq, live[id].tmux);
+        pollLoop(t2);
       } catch (e) {}
     }
-    // tmuxMode was switched on after this project's shells were opened: they stay (they may be running
-    // something), but the project gets a tmux tab too, and the panel lands on a tmux tab, not on an older
-    // plain shell that sits first.
+    updateChrome();
+    // tmuxMode was switched on after this conversation's shells were opened: they stay (they may be running
+    // something), but it gets a tmux tab too, and the panel lands on a tmux tab, not on an older plain
+    // shell that sits first.
+    var tmuxWanted = !!l.tmuxWanted;
     var firstTmux = tabs.filter(function (t) { return t.tmux; })[0];
     if (!tabs.length || (tmuxWanted && !firstTmux)) { await newTab(); return; }
-    activate(tmuxWanted ? firstTmux : tabs[0]);
+    var pick = preferred || tabs[0];
+    if (tmuxWanted && !pick.tmux) pick = firstTmux;
+    activate(pick);
   }
 
-  // The panel can stay alive across project switches: notice the change and swap in that project's terminals.
-  async function checkWorkspace() {
-    if (switching || document.visibilityState === "hidden") return;
-    try {
-      var l = await invoke("term.list");
-      if (l.key === curKey) return;
-    } catch (e) { return; }
-    switching = true;
-    try {
-      detachAll();
-      await restore();
-    } finally {
-      switching = false;
+  async function restore() {
+    var l = null;
+    try { l = await invoke("term.list"); } catch (e) {}
+    if (l) await enter(l); else await newTab();
+  }
+
+  // Follow the host's selected conversation. term.watch is a long poll that the backend answers the moment
+  // the selection moves (it hears the host's session event; the panel itself is never sent one), and its
+  // answer already carries the terminal list, so a switch is one round trip.
+  async function watchLoop() {
+    for (;;) {
+      try {
+        var r = await invoke("term.watch", { key: curKey });
+        if (r.changed) await enter(r);
+      } catch (e) {
+        await new Promise(function (res) { setTimeout(res, 500); });
+      }
     }
   }
 
@@ -670,7 +742,6 @@
   // loading) was never delivered. A reply of {ok:false} (im-select failed) counts as delivered: the
   // backend keeps what it needs to undo a half-done switch, so it is not retried every 500ms.
   setInterval(function () { imeSync(docFocused()); }, 500);
-  setInterval(checkWorkspace, 1500);
   // Plugin settings are pushed to the backend by the host, the panel picks them up from there.
   setInterval(refreshSettings, 2000);
   window.addEventListener("focus", function () { refreshSettings(); });
@@ -682,6 +753,7 @@
     if (bridge.on) bridge.on("appearance:changed", applyAppearance);
     invoke("app.getAppearance").then(applyAppearance).catch(function () {});
     // Settings first, so the first terminal already opens with the user's font instead of flashing the default.
-    refreshSettings().then(restore);
+    // Once the first screen is up, watchLoop follows the host's selected session for as long as the panel lives.
+    refreshSettings().then(restore).then(watchLoop);
   }
 })();

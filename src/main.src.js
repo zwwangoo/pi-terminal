@@ -18,6 +18,8 @@ const PAUSE_ABOVE = 512 * 1024; // pause the pty when an attached, actively poll
 const RESUME_BELOW = 128 * 1024; // resume it once that reader has caught up to here
 const READER_IDLE_MS = 5000; // no poll for this long means nobody is reading: trim instead of pausing
 const POLL_HOLD_MS = 1500;
+const WATCH_HOLD_MS = 1200; // shorter than the host's per-call budget, like POLL_HOLD_MS
+const WATCH_TICK_MS = 300;
 const POLL_CHUNK = 256 * 1024;
 
 // Input method switching (macOS only). im-select reads/writes the current input source through the
@@ -39,6 +41,7 @@ let imeSaved = ""; // input source to put back when the terminal loses focus
 let imeWanted = false; // the owning panel document says the terminal holds the keyboard
 let imeApplied = false; // the focus side has been handled (and not yet undone) for imeWanted
 let imeOwner = ""; // document that reported focus last; only its blur counts
+const SESSION_EVENT = "session:activated";
 const SETTINGS_EVENT = "plugin:settingsChanged";
 let settingsLive = false; // subscribed to SETTINGS_EVENT: the cache is pushed, no TTL needed
 let settingsVer = 0; // bumped by every pushed value, so a slower read cannot overwrite it
@@ -53,22 +56,96 @@ function wakeAll(s) {
   for (const fn of w) fn();
 }
 
-// Which project a session belongs to: projectId when the host provides one, else the primary folder path.
-function wsKey(ws) {
+// Which conversation a terminal belongs to: the host's selected session ("s:<sessionId>"), else the project
+// (projectId when the host provides one, else the primary folder path).
+function wsKey(ws, sessionId) {
+  if (sessionId) return "s:" + sessionId;
   if (ws && typeof ws.projectId === "string" && ws.projectId) return "p:" + ws.projectId;
   return "r:" + ((ws && ws.path) || "");
 }
 
-// Sessions belong to the host's current workspace: the panel and this process read the same value,
-// so there is no per-call workspace hint to pass around.
-async function currentWorkspace() {
+// The session on screen, or null: getActive refuses when the plugin is not active in the project.
+async function activeSession() {
   try {
-    const ws = await pi.workspace.get();
-    if (ws && ws.path) return { cwd: ws.path, key: wsKey(ws) };
+    return await pi.session.getActive();
   } catch (_) {
-    /* no workspace: fall back to home inside the relay */
+    return null;
   }
-  return { cwd: "", key: wsKey(null) };
+}
+
+// Terminals belong to the host's selected session; the project is the fallback.
+async function currentWorkspace() {
+  const snap = await activeSession();
+  let ws = null;
+  try {
+    ws = await pi.workspace.get();
+  } catch (_) {
+    /* no workspace: the relay falls back to home */
+  }
+  return { cwd: (ws && ws.path) || "", key: wsKey(ws, snap && snap.sessionId) };
+}
+
+// Shells are tied to conversations now, and the host reports no event when one is deleted, so the
+// number of live background shells is capped: past the cap the one nobody has touched for longest goes.
+// tmux sessions are exempt: keeping a shell alive across restarts is what that mode is for, and the user
+// ends those by closing the tab or with the "end all tmux sessions" command.
+const MAX_LIVE = 32;
+function evictIdle(keepKey) {
+  const live = [...sessions.values()].filter((s) => !s.exited && !s.tmux);
+  if (live.length < MAX_LIVE) return;
+  let victim = null;
+  for (const s of live) {
+    if (s.key === keepKey) continue;
+    const at = s.lastPollAt;
+    if (!victim || at < victim.at) victim = { s, at };
+  }
+  if (victim) closeSession(victim.s.id, true);
+}
+
+// The answer to term.list / term.watch. Looking up tmux sessions an earlier run left behind happens here,
+// once per off -> on change of the tmuxMode switch (with the switch off they stay invisible).
+async function listPayload(cur) {
+  const on = await tmuxOn();
+  if (!on) discovered = false;
+  else if (!discovered) await discoverTmux().catch(() => {});
+  return {
+    key: cur.key,
+    // New tabs are tmux ones right now (mode on and a tmux binary exists). The panel uses it to move a
+    // conversation that only has plain shells (opened while the mode was off) over to tmux.
+    tmuxWanted: on && !!tmuxBinary(),
+    // For a tmux session "exited" means the session is gone, not that this client left: a session
+    // detached with the tmux prefix is still alive and gets re-attached.
+    sessions: [...sessions.values()].map((s) => ({ id: s.id, key: s.key, exited: s.tmux ? s.gone : s.exited, tmux: !!s.tmux })),
+  };
+}
+
+// Long-poll for "the selection moved away from `key`": answers the moment it does, or with changed:false
+// after WATCH_HOLD_MS so the panel just asks again. The host's session event wakes it at once; the
+// WATCH_TICK_MS re-read is only the safety net for a host that does not deliver that event. The panel
+// gets the full list back, so it does not need a second round trip to restore the new key's terminals.
+const watchWaiters = [];
+function wakeWatchers() {
+  const w = watchWaiters.splice(0);
+  for (const fn of w) fn();
+}
+async function watchKey(key) {
+  const until = Date.now() + WATCH_HOLD_MS;
+  for (;;) {
+    const cur = await currentWorkspace();
+    if (cur.key !== key) return { changed: true, ...(await listPayload(cur)) };
+    const left = until - Date.now();
+    if (left <= 0) return { changed: false, ...(await listPayload(cur)) };
+    await new Promise((resolve) => {
+      const t = setTimeout(done, Math.min(WATCH_TICK_MS, left));
+      function done() {
+        clearTimeout(t);
+        const i = watchWaiters.indexOf(done);
+        if (i >= 0) watchWaiters.splice(i, 1);
+        resolve();
+      }
+      watchWaiters.push(done);
+    });
+  }
 }
 
 // ---- tmux (optional persistence) --------------------------------------------
@@ -286,8 +363,11 @@ function startRelay(s, cols, rows, spec) {
   });
 }
 
-async function openSession({ cols, rows }) {
-  const { cwd, key } = await currentWorkspace();
+async function openSession({ cols, rows, key: wantKey }) {
+  const cur = await currentWorkspace();
+  const cwd = cur.cwd;
+  const key = wantKey || cur.key;
+  evictIdle(key);
   const c = clampDim(cols, 80);
   const r = clampDim(rows, 24);
   const n = ++seq;
@@ -694,21 +774,10 @@ async function onPanelInvoke(channel, p) {
         nextSeq: r.nextSeq,
       };
     }
-    case "term.list": {
-      const cur = await currentWorkspace();
-      const on = await tmuxOn();
-      if (!on) discovered = false;
-      else if (!discovered) await discoverTmux().catch(() => {});
-      return {
-        key: cur.key,
-        // New tabs are tmux ones right now (mode on and a tmux binary exists). The panel uses it to move a
-        // project that only has plain shells (opened while the mode was off) over to tmux.
-        tmuxWanted: on && !!tmuxBinary(),
-        // For a tmux session "exited" means the session is gone, not that this client left: a session
-        // detached with the tmux prefix is still alive and gets re-attached.
-        sessions: [...sessions.values()].map((s) => ({ id: s.id, key: s.key, exited: s.tmux ? s.gone : s.exited, tmux: !!s.tmux })),
-      };
-    }
+    case "term.list":
+      return listPayload(await currentWorkspace());
+    case "term.watch":
+      return watchKey(p.key);
     case "term.write": {
       const s = need(p.id);
       if (!s.exited && s.proc && typeof p.data === "string") s.proc.stdin.write(Buffer.from(p.data, "utf8"));
@@ -777,10 +846,13 @@ async function onLoad() {
   try {
     if (typeof pi !== "undefined" && pi.events && typeof pi.events.on === "function") {
       pi.events.on(SETTINGS_EVENT, onSettingsChanged);
+      // The host sends the session event to this process only (panels never get it): it just wakes
+      // term.watch, which then re-reads the selection itself.
+      pi.events.on(SESSION_EVENT, wakeWatchers);
       settingsLive = true;
     }
   } catch (_) {
-    /* no event API: the TTL read still works */
+    /* no event API: the TTL read still works, and term.watch notices a switch on its own tick */
   }
   await registerOpenCommand();
   await registerKillTmuxCommand();
@@ -788,7 +860,10 @@ async function onLoad() {
 
 async function onUnload() {
   try {
-    if (settingsLive) pi.events.off(SETTINGS_EVENT, onSettingsChanged);
+    if (settingsLive) {
+      pi.events.off(SETTINGS_EVENT, onSettingsChanged);
+      pi.events.off(SESSION_EVENT, wakeWatchers);
+    }
   } catch (_) {}
   settingsLive = false;
   // detach, not kill: a tmux-backed shell is meant to outlive the plugin process.

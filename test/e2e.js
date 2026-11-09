@@ -203,6 +203,92 @@ async function readUntil(id, re, ms = 8000) {
   await inv("term.close", { id: pa.id });
   await inv("term.close", { id: pb.id });
 
+  // per-conversation binding: with a selected session the key is the session, whatever the project is;
+  // when the host cannot name one, the project key from above applies again.
+  const defWs = async () => ({ path: process.argv[2] || process.env.HOME, projectId: "projS" });
+  global.pi.workspace.get = defWs;
+  let activeSnap = { sessionId: "sess1", projectPath: "/tmp", activeTurn: null };
+  global.pi.session = { getActive: async () => activeSnap };
+  const sa = await inv("term.open", { cols: 80, rows: 24 });
+  activeSnap = { sessionId: "sess2", projectPath: "/tmp", activeTurn: null };
+  const sb = await inv("term.open", { cols: 80, rows: 24 });
+  const sb2 = await inv("term.open", { cols: 80, rows: 24 });
+  check("session: open tags terminal with the session key", sa.key === "s:sess1" && sb.key === "s:sess2" && sb2.key === "s:sess2", `${sa.key} ${sb.key} ${sb2.key}`);
+  check("session: cwd stays the workspace path", sa.cwd === (process.argv[2] || process.env.HOME), sa.cwd);
+  const l2 = await inv("term.list");
+  check("session: list reports the active session and only its terminals", l2.key === "s:sess2" && idsFor(l2).length === 2 && idsFor(l2).includes(sb.id) && idsFor(l2).includes(sb2.id), JSON.stringify({ k: l2.key, ids: idsFor(l2) }));
+  activeSnap = { sessionId: "sess1", projectPath: "/tmp", activeTurn: null };
+  const l1 = await inv("term.list");
+  check("session: switching the active session switches the list", l1.key === "s:sess1" && idsFor(l1).length === 1 && idsFor(l1)[0] === sa.id, JSON.stringify({ k: l1.key, ids: idsFor(l1) }));
+  // a brand-new conversation starts with no terminals of its own
+  activeSnap = { sessionId: "sess3", projectPath: "/tmp", activeTurn: null };
+  const l3 = await inv("term.list");
+  check("session: a new conversation has no terminals yet", l3.key === "s:sess3" && idsFor(l3).length === 0, JSON.stringify(idsFor(l3)));
+  // no usable session -> project binding
+  global.pi.session.getActive = async () => { throw new Error("PERMISSION_DENIED"); };
+  const lf = await inv("term.list");
+  check("session: a refused getActive falls back to the project key", lf.key === "p:projS", lf.key);
+  global.pi.session.getActive = async () => null;
+  const ln = await inv("term.list");
+  check("session: no selected session falls back to the project key", ln.key === "p:projS", ln.key);
+  for (const x of [sa, sb, sb2]) await inv("term.close", { id: x.id });
+
+  // term.watch: a long poll that answers when the selection leaves the key the panel shows
+  activeSnap = { sessionId: "w1", projectPath: "/tmp", activeTurn: null };
+  global.pi.session.getActive = async () => activeSnap;
+  let wt0 = Date.now();
+  const w0 = await inv("term.watch", { key: "s:other" });
+  check("watch: a different key is answered at once, with the list", w0.changed === true && w0.key === "s:w1" && Array.isArray(w0.sessions) && Date.now() - wt0 < 150, `${Date.now() - wt0}ms key=${w0.key}`);
+  wt0 = Date.now();
+  const w1 = await inv("term.watch", { key: "s:w1" });
+  const held = Date.now() - wt0;
+  check("watch: an unchanged key is held ~1.2s, then changed:false", w1.changed === false && held >= 1100 && held < 1800, `${held}ms`);
+  // the tick (host without the session event) notices a switch within ~300ms
+  wt0 = Date.now();
+  const pend = inv("term.watch", { key: "s:w1" });
+  await sleep(100);
+  activeSnap = { sessionId: "w2", projectPath: "/tmp", activeTurn: null };
+  const w2 = await pend;
+  check("watch: a switch is noticed by the tick alone", w2.changed === true && w2.key === "s:w2" && Date.now() - wt0 < 500, `${Date.now() - wt0}ms`);
+  // with the host's session event the same switch is answered at once, no waiting for the tick
+  const evl = new Set();
+  const prevEvents = global.pi.events;
+  global.pi.events = { on: (e, h) => { if (e === "session:activated") evl.add(h); }, off: (e, h) => { evl.delete(h); } };
+  await m.onLoad();
+  check("watch: onLoad subscribes to the session event", evl.size === 1, "listeners=" + evl.size);
+  wt0 = Date.now();
+  const pend2 = inv("term.watch", { key: "s:w2" });
+  await sleep(50);
+  activeSnap = { sessionId: "w3", projectPath: "/tmp", activeTurn: null };
+  for (const h of [...evl]) h({ sessionId: "w3" });
+  const w3 = await pend2;
+  check("watch: the session event answers at once", w3.changed === true && w3.key === "s:w3" && Date.now() - wt0 < 200, `${Date.now() - wt0}ms`);
+  await m.onUnload();
+  check("watch: unload unsubscribes from the session event", evl.size === 0, "listeners=" + evl.size);
+  global.pi.events = prevEvents;
+  // open honours the key the panel is showing, even if the selection moved between the click and the call
+  activeSnap = { sessionId: "w9", projectPath: "/tmp", activeTurn: null };
+  const ok1 = await inv("term.open", { cols: 80, rows: 24, key: "s:w1" });
+  check("open: the panel's key wins over a selection that moved", ok1.key === "s:w1", ok1.key);
+  await inv("term.close", { id: ok1.id });
+
+  // idle cap: deleting a conversation sends no event, so the oldest untouched shell makes room past 32
+  activeSnap = null;
+  global.pi.session.getActive = async () => activeSnap;
+  const many = [];
+  for (let i = 0; i < 32; i++) {
+    activeSnap = { sessionId: "ev" + i, projectPath: "/tmp", activeTurn: null };
+    many.push(await inv("term.open", { cols: 80, rows: 24 }));
+  }
+  await inv("term.poll", { id: many[1].id, gen: 0 }); // ev1 was read recently, so ev0 is the idlest
+  activeSnap = { sessionId: "evNew", projectPath: "/tmp", activeTurn: null };
+  const fresh = await inv("term.open", { cols: 80, rows: 24 });
+  const liveIds = (await inv("term.list")).sessions.filter((s) => !s.exited).map((s) => s.id);
+  check("session cap: the idlest shell is recycled for the new one", liveIds.length === 32 && !liveIds.includes(many[0].id) && liveIds.includes(many[1].id) && liveIds.includes(fresh.id), `live=${liveIds.length}`);
+  for (const x of [...many.slice(1), fresh]) await inv("term.close", { id: x.id });
+  delete global.pi.session;
+  global.pi.workspace.get = async () => ({ path: process.argv[2] || process.env.HOME });
+
   // second session + close kills process
   const o2 = await inv("term.open", { cols: 80, rows: 24 });
   await sleep(800);
