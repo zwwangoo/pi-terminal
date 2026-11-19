@@ -10,7 +10,11 @@
  */
 const { spawn } = require("node:child_process");
 const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
 const { RingBuffer } = require("./ring-buffer.js");
+
+const REMOTE_PREFIX = "remote-project:"; // path token of a project that lives on a remote host
 
 const RELAY_SRC = __RELAY_SRC__;
 const RING_MAX = 1024 * 1024; // output retained per session; also the replay cap when a panel reattaches
@@ -82,7 +86,13 @@ async function currentWorkspace() {
   } catch (_) {
     /* no workspace: the relay falls back to home */
   }
-  return { cwd: (ws && ws.path) || "", key: wsKey(ws, snap && snap.sessionId) };
+  const key = wsKey(ws, snap && snap.sessionId);
+  // A remote project is never a local directory: its path is a "remote-project:<id>" token and the real
+  // directory lives on the host (ws.remote.path). It must never fall back to a local shell.
+  if (ws && ((typeof ws.path === "string" && ws.path.startsWith(REMOTE_PREFIX)) || ws.remote)) {
+    return { cwd: "", key, remote: { projectPath: ws.path || "", path: (ws.remote && ws.remote.path) || "" } };
+  }
+  return { cwd: (ws && ws.path) || "", key, remote: null };
 }
 
 // Shells are tied to conversations now, and the host reports no event when one is deleted, so the
@@ -106,16 +116,32 @@ function evictIdle(keepKey) {
 // once per off -> on change of the tmuxMode switch (with the switch off they stay invisible).
 async function listPayload(cur) {
   const on = await tmuxOn();
-  if (!on) discovered = false;
-  else if (!discovered) await discoverTmux().catch(() => {});
+  if (!on) {
+    discovered = false;
+    remoteDiscovered.clear();
+  } else {
+    if (!discovered) await discoverTmux().catch(() => {});
+    if (cur.remote) {
+      const r = await resolveRemote(cur.remote);
+      // Never wait for the host longer than the panel can: an unreachable one must not hold up the list.
+      if (r.target) await withinMs(discoverRemoteTmux(r).catch(() => {}), REMOTE_LIST_WAIT_MS);
+    }
+  }
   return {
     key: cur.key,
-    // New tabs are tmux ones right now (mode on and a tmux binary exists). The panel uses it to move a
-    // conversation that only has plain shells (opened while the mode was off) over to tmux.
-    tmuxWanted: on && !!tmuxBinary(),
+    // New tabs are tmux ones right now (mode on and a tmux binary exists; on a remote host tmux is looked
+    // for there, when the tab is opened). The panel uses it to move a conversation that only has plain
+    // shells (opened while the mode was off) over to tmux.
+    tmuxWanted: on && (cur.remote ? true : !!tmuxBinary()),
     // For a tmux session "exited" means the session is gone, not that this client left: a session
     // detached with the tmux prefix is still alive and gets re-attached.
-    sessions: [...sessions.values()].map((s) => ({ id: s.id, key: s.key, exited: s.tmux ? s.gone : s.exited, tmux: !!s.tmux })),
+    // In a remote project only remote shells belong to the conversation. A local one under the same key is
+    // left over from before the project was remote (or from a plugin version without remote support): it
+    // is not offered, so the panel opens a remote tab instead of silently reattaching to a local shell.
+    // It keeps running until its tab is ended with "end all tmux sessions".
+    sessions: [...sessions.values()].filter((s) => !cur.remote || s.remote || s.key !== cur.key).map((s) => ({
+      id: s.id, key: s.key, exited: s.tmux ? s.gone : s.exited, tmux: !!s.tmux, remote: s.remote ? s.remote.target.label : "",
+    })),
   };
 }
 
@@ -202,11 +228,9 @@ async function tmuxOn() {
   return v === true || v === "on" || v === "auto";
 }
 
-// One tmux call against the private server; resolves {ok, out, err} and never rejects on a non-zero exit.
-function tmuxRun(args) {
-  return new Promise((resolve, reject) => {
-    const bin = tmuxBinary();
-    if (!bin) return reject(new Error("tmux not found"));
+// Run a program to completion and collect its output; resolves {ok, out, err}, never rejects.
+function spawnCapture(bin, args, env, timeoutMs) {
+  return new Promise((resolve) => {
     let out = "", err = "", settled = false, child;
     const done = (r) => {
       if (settled) return;
@@ -216,24 +240,29 @@ function tmuxRun(args) {
     };
     const timer = setTimeout(() => {
       try { if (child) child.kill("SIGKILL"); } catch (_) {}
-      done({ ok: false, out, err: "tmux timed out" });
-    }, TMUX_TIMEOUT_MS);
+      done({ ok: false, out, err: "timed out" });
+    }, timeoutMs);
     timer.unref?.();
     try {
-      // -u: assume a UTF-8 terminal, or tmux replaces non-ASCII text (a Chinese project path) with "_".
-      child = spawn(bin, ["-u", "-L", tmuxSocket(), ...args], {
-        stdio: ["ignore", "pipe", "pipe"],
-        env: relayEnv("/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"),
-      });
+      child = spawn(bin, args, { stdio: ["ignore", "pipe", "pipe"], env });
     } catch (e) {
-      clearTimeout(timer);
-      return reject(e);
+      return done({ ok: false, out, err: String((e && e.message) || e) });
     }
     child.stdout.on("data", (d) => { out += d.toString("utf8"); });
     child.stderr.on("data", (d) => { err += d.toString("utf8"); });
     child.on("error", (e) => done({ ok: false, out, err: String((e && e.message) || e) }));
-    child.on("close", (code) => done({ ok: code === 0, out, err: err.trim() }));
+    child.on("close", (code) => done({ ok: code === 0, code, out, err: err.trim() }));
   });
+}
+
+// One tmux call against the private server; resolves {ok, out, err} and never rejects on a non-zero exit.
+function tmuxRun(args) {
+  const bin = tmuxBinary();
+  if (!bin) return Promise.reject(new Error("tmux not found"));
+  // -u: assume a UTF-8 terminal, or tmux replaces non-ASCII text (a Chinese project path) with "_".
+  return spawnCapture(bin, ["-u", "-L", tmuxSocket(), ...args], relayEnv("/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"), TMUX_TIMEOUT_MS).then(
+    (r) => (r.err === "timed out" ? { ...r, err: "tmux timed out" } : r),
+  );
 }
 
 // tmux session names may not contain "." or ":", so the project key is hashed into the name; the exact
@@ -249,9 +278,16 @@ function tmuxSpec(name, key, create) {
   return { tmux: bin, sock: tmuxSocket(), name, key, create };
 }
 
-async function tmuxHas(name) {
+// Whether the tmux session of `s` exists (on its remote host when it has one).
+async function tmuxHas(s) {
   try {
-    return (await tmuxRun(["has-session", "-t", "=" + name])).ok;
+    const args = ["has-session", "-t", "=" + s.id];
+    if (!s.remote) return (await tmuxRun(args)).ok;
+    // Only an answer from tmux counts: 1 is its "no such session", 127 means tmux is gone from the host.
+    // An ssh failure (255) or a timeout says nothing about the session, and a dropped network must not
+    // close the tab of a shell that is still alive.
+    const r = await remoteTmuxRun(s.remote.target, args, REMOTE_CHECK_TIMEOUT_MS);
+    return r.ok || (r.code !== 1 && r.code !== 127);
   } catch (_) {
     return false;
   }
@@ -275,11 +311,307 @@ async function discoverTmux() {
   }
 }
 
+// The same for a remote host's tmux server. Looked up once per host: concurrent callers share the one ssh
+// call (a second term.list must not conclude "nothing there" while the first is still asking), and after a
+// failure it is retried only after a pause, because an unreachable host would stall every term.list by the
+// ssh timeout.
+const remoteDiscovered = new Map(); // hostKey -> { ok, at, p }
+function discoverRemoteTmux(remote) {
+  const h = remote.target.hostKey;
+  const prev = remoteDiscovered.get(h);
+  if (prev && (prev.p || prev.ok || Date.now() - prev.at < REMOTE_DISCOVER_RETRY_MS)) return prev.p || Promise.resolve();
+  const entry = { ok: false, at: Date.now(), p: null };
+  remoteDiscovered.set(h, entry);
+  entry.p = (async () => {
+    const r = await remoteTmuxRun(remote.target, ["list-sessions", "-F", ["#{session_name}", "#{@pi_key}", "#{session_path}"].join(TMUX_SEP)]);
+    if (remoteDiscovered.get(h) !== entry) return; // forgotten meanwhile (end-all, tmuxMode switched off)
+    entry.at = Date.now();
+    // exit 1 with no server is "nothing survived"; any other failure (ssh, timeout) is retried later
+    if (!r.ok && r.code !== 1) return;
+    entry.ok = true;
+    for (const line of r.ok ? r.out.split("\n") : []) {
+      const [name, key, cwd] = line.split(TMUX_SEP);
+      if (!name || !name.startsWith(TMUX_PREFIX) || sessions.has(name)) continue;
+      sessions.set(name, newSession(name, cwd || "", key || "", 80, 24, true, { target: remote.target, path: cwd || remote.path }));
+    }
+  })().finally(() => { entry.p = null; });
+  return entry.p;
+}
+
+// Waits for a lookup, but not for longer than the panel should wait to draw: on a slow or unreachable host
+// the list is answered without it, and the sessions it finds show up in a later list.
+function withinMs(p, ms) {
+  let t;
+  return Promise.race([p, new Promise((resolve) => { t = setTimeout(resolve, ms); })]).finally(() => clearTimeout(t));
+}
+
 async function killAllTmux() {
   if (tmuxBinary()) await tmuxRun(["kill-server"]);
+  // Remote hosts: the ones that still have a session here, and the current project's host. This ends every
+  // session on the plugin's private socket there, also ones another computer opened on the same host.
+  const targets = new Map();
+  for (const s of sessions.values()) if (s.tmux && s.remote) targets.set(s.remote.target.hostKey, s.remote.target);
+  const cur = await currentWorkspace().catch(() => null);
+  if (cur && cur.remote) {
+    const r = await resolveRemote(cur.remote);
+    if (r.target) targets.set(r.target.hostKey, r.target);
+  }
+  for (const h of targets.keys()) remoteDiscovered.delete(h);
+  await Promise.all([...targets.values()].map((t) => remoteTmuxRun(t, ["kill-server"])));
   // Sessions with a relay notice by themselves (the client exits, has-session fails). The ones that
   // were only discovered have no relay to notice anything, so drop them here.
   for (const [id, s] of [...sessions]) if (s.tmux && !s.proc) closeSession(id, false);
+}
+
+// ---- remote projects (ssh) ----------------------------------------------------
+//
+// A project that lives on a remote host has the path token "remote-project:<id>" and the host reports
+// the real directory as workspace.remote.path. The shell then runs on that host, behind ssh: the relay
+// still owns a local pty, it just runs `ssh -tt ...` on it instead of a login shell. Which host the
+// project belongs to is not part of the workspace info, so it is looked up in the host's own data:
+//   1. the plugin setting remoteHost (hostKey or label), when set;
+//   2. the project group record (kv "projectGroups" in pi.sqlite, read-only through the sqlite3 CLI);
+//   3. the only host with SSH connection info in remote-hosts.json.
+// Anything else is an error shown in the terminal. A remote project never falls back to a local shell.
+const SSH_CONNECT_TIMEOUT = 10;
+const REMOTE_TTL_MS = 10000;
+const REMOTE_FAIL_TTL_MS = 3000;
+const REMOTE_DISCOVER_RETRY_MS = 30000;
+const REMOTE_LIST_WAIT_MS = 3000; // how long a term.list waits for a host's tmux lookup before answering without it
+const REMOTE_CHECK_TIMEOUT_MS = 8000; // one quick ssh check (has-session, tmux -V)
+const SQLITE_CANDIDATES = ["/usr/bin/sqlite3", "/opt/homebrew/bin/sqlite3", "/usr/local/bin/sqlite3"];
+// The remote command line is parsed by the remote login shell, which may be fish: every value goes
+// into single quotes and may contain neither ' nor \ (both mean something different in fish and sh).
+// PATH is extended because a non-interactive ssh command often lacks Homebrew's directories.
+const R_PATH = 'PATH="$PATH:/opt/homebrew/bin:/usr/local/bin"; export PATH; ';
+
+function dataDir() {
+  return process.env.PI_TERMINAL_DATA_DIR || process.env.PI_DESKTOP_DATA_DIR || path.join(os.homedir(), ".pi-desktop");
+}
+
+function expandHome(p) {
+  return p === "~" || p.startsWith("~/") ? path.join(os.homedir(), p.slice(1)) : p;
+}
+
+function shq(s) {
+  s = String(s);
+  if (/['\\\u0000-\u001f\u007f]/.test(s)) throw new Error("unsupported character (quote, backslash or control) in remote value: " + JSON.stringify(s));
+  return "'" + s + "'";
+}
+
+function cleanKey(k) {
+  return String(k || "").replace(/['\\\u0000-\u001f\u007f]/g, "_");
+}
+
+// Hosts with SSH connection info in the host's remote-hosts.json (the file the desktop app keeps). The file
+// is parsed whole, but only these connection fields are picked out: nothing else in it (the stored device
+// tokens included) is kept or used. `invalid` lists hosts whose address or user cannot be put on a command line.
+function readSshHosts() {
+  let raw;
+  try {
+    raw = JSON.parse(fs.readFileSync(path.join(dataDir(), "remote-hosts.json"), "utf8"));
+  } catch (_) {
+    return { hosts: [], invalid: [] };
+  }
+  const hosts = [], invalid = [];
+  for (const h of raw && Array.isArray(raw.hosts) ? raw.hosts : []) {
+    const ssh = h && h.metadata && h.metadata.ssh;
+    if (!h || typeof h.hostKey !== "string" || !ssh || typeof ssh.host !== "string") continue;
+    // These go onto an ssh command line: no leading "-" (option injection), no odd characters.
+    const user = typeof ssh.user === "string" ? ssh.user : "";
+    if (!/^[A-Za-z0-9._:\-]+$/.test(ssh.host) || ssh.host.startsWith("-") || (user && (!/^[A-Za-z0-9._\-]+$/.test(user) || user.startsWith("-")))) {
+      invalid.push(h.hostKey);
+      continue;
+    }
+    hosts.push({
+      hostKey: h.hostKey,
+      label: typeof h.label === "string" && h.label ? h.label : h.hostKey,
+      host: ssh.host,
+      port: Number.isInteger(ssh.port) && ssh.port > 0 && ssh.port < 65536 ? ssh.port : 22,
+      user,
+      identityFile: typeof ssh.identityFile === "string" ? ssh.identityFile : "",
+    });
+  }
+  return { hosts, invalid };
+}
+
+function sqliteBinary() {
+  const override = process.env.PI_TERMINAL_SQLITE;
+  for (const p of override ? [override] : SQLITE_CANDIDATES) {
+    try {
+      fs.accessSync(p, fs.constants.X_OK);
+      return p;
+    } catch (_) {
+      /* try the next one */
+    }
+  }
+  return null;
+}
+
+// The project group record of a remote project: {hostKey, path}, or null when it cannot be read.
+async function lookupProjectBinding(projectPath) {
+  if (!projectPath.startsWith(REMOTE_PREFIX)) return null;
+  const id = projectPath.slice(REMOTE_PREFIX.length);
+  const bin = sqliteBinary();
+  const db = path.join(dataDir(), "pi.sqlite");
+  if (!bin || !/^[A-Za-z0-9_\-]{1,80}$/.test(id) || !fs.existsSync(db)) return null;
+  const r = await spawnCapture(
+    bin,
+    ["-readonly", "-cmd", ".timeout 1500", db, "select value_json from kv where ns='projectGroups' and key='" + id + "'"],
+    { PATH: "/usr/bin:/bin" },
+    4000,
+  );
+  if (!r.ok || !r.out.trim()) return null;
+  try {
+    const remote = JSON.parse(r.out.trim()).remote;
+    if (remote && typeof remote.hostKey === "string") {
+      return { hostKey: remote.hostKey, path: typeof remote.path === "string" ? remote.path : "" };
+    }
+  } catch (_) {
+    /* unreadable record */
+  }
+  return null;
+}
+
+// Which host a remote project runs on. The project's own binding (what the desktop app recorded when the
+// project was added) is authoritative. The remoteHost setting only stands in when the binding cannot be
+// read; it never overrides it, so a project is never sent to a machine other than its own. There is
+// deliberately no "the only SSH host" guess either: with the binding unreadable that guess can pick the
+// wrong machine, and the commands would run there.
+async function resolveRemoteNow(remote, pref) {
+  const { hosts, invalid } = readSshHosts();
+  const names = hosts.map((h) => h.label + " (" + h.hostKey + ")").join(", ") || "none";
+  const b = await lookupProjectBinding(remote.projectPath).catch(() => null);
+  let hostKey = b ? b.hostKey : "";
+  const rpath = remote.path || (b ? b.path : "");
+  if (!hostKey) {
+    if (!pref) {
+      throw new Error("cannot tell which remote host this project belongs to (its binding could not be read); set the plugin setting remoteHost (hosts with SSH info: " + names + ")");
+    }
+    const h = hosts.find((x) => x.hostKey === pref) || hosts.find((x) => x.label.toLowerCase() === pref.toLowerCase());
+    if (!h) throw new Error('setting remoteHost "' + pref + '" matches no SSH host in remote-hosts.json (hosts with SSH info: ' + names + ")");
+    hostKey = h.hostKey;
+  }
+  const target = hosts.find((x) => x.hostKey === hostKey);
+  if (!target) {
+    if (invalid.includes(hostKey)) {
+      throw new Error("remote host " + hostKey + " has SSH connection info with characters this plugin refuses to put on a command line (host or user name)");
+    }
+    throw new Error("remote host " + hostKey + " has no SSH connection info in remote-hosts.json (it was not added over SSH), so the terminal cannot reach it");
+  }
+  if (!rpath) throw new Error("the remote project has no directory on " + target.label);
+  shq(rpath); // refuses a directory the remote command line cannot carry safely
+  return { target, path: rpath };
+}
+
+const remoteCache = new Map();
+// Resolved once per project for a few seconds: term.watch asks every second, and every miss reads
+// files and spawns sqlite3.
+async function resolveRemote(remote) {
+  const v = (await rawSettings()).remoteHost;
+  const pref = typeof v === "string" ? v.trim() : "";
+  const ck = remote.projectPath + "\n" + remote.path + "\n" + pref;
+  const hit = remoteCache.get(ck);
+  if (hit && Date.now() < hit.until) return hit.value;
+  let value;
+  try {
+    value = await resolveRemoteNow(remote, pref);
+  } catch (e) {
+    value = { error: String((e && e.message) || e) };
+  }
+  if (remoteCache.size > 64) remoteCache.clear();
+  remoteCache.set(ck, { value, until: Date.now() + (value.error ? REMOTE_FAIL_TTL_MS : REMOTE_TTL_MS) });
+  return value;
+}
+
+function sshBinary() {
+  return process.env.PI_TERMINAL_SSH || "ssh";
+}
+
+// argv of an ssh call. tty=true is the interactive terminal (needs a pty), false is a one-off command.
+function sshArgv(t, tty, remoteCmd) {
+  const a = [
+    sshBinary(), tty ? "-tt" : "-T",
+    "-o", "BatchMode=yes", // never ask for a password or passphrase: there is nobody to type it into
+    "-o", "ConnectTimeout=" + SSH_CONNECT_TIMEOUT,
+    "-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=3",
+    "-o", "StrictHostKeyChecking=accept-new",
+    "-o", "LogLevel=ERROR",
+  ];
+  if (t.identityFile) a.push("-i", expandHome(t.identityFile), "-o", "IdentitiesOnly=yes");
+  a.push("-p", String(t.port), (t.user ? t.user + "@" : "") + t.host, remoteCmd);
+  return a;
+}
+
+// Login shell in the project directory ($1). The directory is an argument, not part of the script.
+function remoteShellCommand(rpath) {
+  return "sh -c " + shq(R_PATH + 'cd "$1" && exec "${SHELL:-/bin/sh}" -l') + " sh " + shq(rpath);
+}
+
+// tmux on the remote host, private socket: $1 directory, $2 socket, $3 session, $4 project key, $5 1 = create.
+// Same logic as relay.py's local tmux mode (create when missing, minimal config only when the user has none,
+// tag the session with its key, attach and detach other clients).
+const TMUX_REMOTE_SCRIPT = [
+  R_PATH,
+  'command -v tmux >/dev/null 2>&1 || { echo "pi-terminal: tmux is not installed on this host (install it or turn off tmuxMode)"; exit 127; };',
+  't() { tmux -u -L "$S" "$@"; };',
+  'S="$2"; N="$3";',
+  'if ! t has-session -t "=$N" 2>/dev/null; then',
+  '[ "$5" = 1 ] || { echo "pi-terminal: tmux session $N no longer exists"; exit 1; };',
+  't new-session -d -s "$N" -c "$1" "${SHELL:-/bin/sh}" -l || exit 1;',
+  'if [ ! -f "$HOME/.tmux.conf" ] && [ ! -f "${XDG_CONFIG_HOME:-$HOME/.config}/tmux/tmux.conf" ]; then',
+  "t set -g status off; t set -g mouse on; t set -g history-limit 20000; t set -g escape-time 10;",
+  't set -g focus-events on; t set -g set-clipboard on; t set -ga terminal-features "xterm-256color:RGB";',
+  "fi; fi;",
+  'if [ -n "$4" ]; then t set-option -t "=$N:" @pi_key "$4"; fi;',
+  'exec tmux -u -L "$S" attach-session -d -t "=$N"',
+].join(" ");
+
+// For an attach (create = 0) the directory is not used, so a session whose recorded path the command line
+// cannot carry (a quote in it) can still be reattached.
+function remoteTmuxCommand(name, key, rpath, create) {
+  return ["sh -c", shq(TMUX_REMOTE_SCRIPT), "sh", shq(create ? rpath : "/"), shq(tmuxSocket()), shq(name), shq(cleanKey(key)), create ? "1" : "0"].join(" ");
+}
+
+// What startRelay hands the relay for a remote session: the whole ssh command.
+function remoteSpec(remote, tmuxName2, key, create) {
+  const cmd = tmuxName2 ? remoteTmuxCommand(tmuxName2, key, remote.path, create) : remoteShellCommand(remote.path);
+  return { exec: sshArgv(remote.target, true, cmd) };
+}
+
+// One tmux call on a remote host (no pty); resolves {ok, code, out, err} like tmuxRun. code is tmux's own
+// exit status (1: no such session / no server, 127: no tmux on the host) or ssh's (255: could not connect).
+function remoteTmuxRun(target, args, timeoutMs) {
+  let cmd;
+  try {
+    cmd = "sh -c " + shq(R_PATH + 'exec tmux -u -L "$@"') + " sh " + [tmuxSocket(), ...args].map(shq).join(" ");
+  } catch (e) {
+    return Promise.resolve({ ok: false, out: "", err: String(e.message || e) });
+  }
+  const a = sshArgv(target, false, cmd);
+  return spawnCapture(a[0], a.slice(1), { ...process.env }, timeoutMs || (SSH_CONNECT_TIMEOUT + 6) * 1000);
+}
+
+// What an ssh failure says, cut down to something one line of the panel can show.
+function sshFailure(target, r) {
+  const why = (r.err || "exit " + r.code).split("\n").filter(Boolean).slice(-2).join(" ").slice(0, 300);
+  return new Error("cannot reach " + target.label + " over ssh: " + why);
+}
+
+// Checked before a tab is opened on a host, in one ssh call: the host answers, tmux is there (tmux tabs),
+// and the project directory can be entered. Each failure has to be an error the panel shows, not a tab
+// whose shell dies at once: the panel would open a fresh one, again and again.
+const PREFLIGHT_SCRIPT = R_PATH + 'if [ "$2" = 1 ]; then command -v tmux >/dev/null 2>&1 || exit 127; fi; cd "$1"';
+async function remotePreflight(remote, needTmux) {
+  const cmd = "sh -c " + shq(PREFLIGHT_SCRIPT) + " sh " + shq(remote.path) + " " + (needTmux ? "1" : "0");
+  const a = sshArgv(remote.target, false, cmd);
+  const r = await spawnCapture(a[0], a.slice(1), { ...process.env }, REMOTE_CHECK_TIMEOUT_MS);
+  if (r.ok) return;
+  const label = remote.target.label;
+  if (needTmux && r.code === 127) throw new Error("tmux is not installed on " + label + " (install it there, or turn off tmuxMode)");
+  if (r.code === 255 || r.code === undefined) throw sshFailure(remote.target, r);
+  const why = (r.err || "").split("\n").filter(Boolean).slice(-1)[0] || "";
+  throw new Error("cannot enter " + remote.path + " on " + label + (why ? ": " + why.slice(0, 200) : ""));
 }
 
 // ---- sessions ------------------------------------------------------------------
@@ -288,9 +620,10 @@ function clampDim(v, fallback) {
   return Math.max(2, Math.min(1000, (v | 0) || fallback || 80));
 }
 
-function newSession(id, cwd, key, cols, rows, tmux) {
+// `remote` is {target, path} for a shell that runs on a remote host over ssh, else null.
+function newSession(id, cwd, key, cols, rows, tmux, remote) {
   return {
-    id, proc: null, cwd, key, cols, rows, tmux: !!tmux,
+    id, proc: null, cwd, key, cols, rows, tmux: !!tmux, remote: remote || null,
     gone: false, // tmux only: the tmux session itself no longer exists
     ring: new RingBuffer(RING_MAX),
     cursor: 1, // seq the current reader wants next
@@ -315,12 +648,13 @@ function startRelay(s, cols, rows, spec) {
   s.exitCode = null;
   s.err = "";
   s.gone = false;
-  const args = ["-c", RELAY_SRC, s.cwd, String(cols), String(rows)];
+  // A remote shell has no local directory: ssh starts it in the project directory on the host.
+  const args = ["-c", RELAY_SRC, s.remote ? "" : s.cwd, String(cols), String(rows)];
   if (spec) args.push(JSON.stringify(spec));
-  const proc = spawn("python3", args, {
-    stdio: ["pipe", "pipe", "pipe", "pipe"],
-    env: relayEnv("/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin"),
-  });
+  const env = relayEnv("/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin");
+  // ssh finds the key in the agent through this socket; the relay otherwise starts with a bare environment.
+  if (s.remote && process.env.SSH_AUTH_SOCK) env.SSH_AUTH_SOCK = process.env.SSH_AUTH_SOCK;
+  const proc = spawn("python3", args, { stdio: ["pipe", "pipe", "pipe", "pipe"], env });
   s.proc = proc;
   proc.stdout.on("data", (d) => {
     if (s.proc !== proc) return;
@@ -353,7 +687,7 @@ function startRelay(s, cols, rows, spec) {
     // A tmux client also exits when it is merely detached (prefix + d). Find out whether the session
     // survived before announcing it, so term.list does not hide a shell that is still alive.
     if (s.tmux) {
-      const alive = await tmuxHas(s.id);
+      const alive = await tmuxHas(s);
       if (s.proc !== proc) return;
       s.gone = !alive;
     }
@@ -373,15 +707,28 @@ async function openSession({ cols, rows, key: wantKey }) {
   const n = ++seq;
   let id = "t" + n;
   let spec = null;
-  if (await tmuxOn()) {
-    // On means tmux: a missing binary is an error (thrown by tmuxSpec), not a fall back to a plain shell.
-    id = tmuxName(key, n);
-    spec = tmuxSpec(id, key, true);
+  let remote = null;
+  if (cur.remote) {
+    // A remote project: any failure to find or reach its host is an error here, never a local shell.
+    const found = await resolveRemote(cur.remote);
+    if (found.error) throw new Error(found.error);
+    remote = { target: found.target, path: found.path };
   }
-  const s = newSession(id, cwd, key, c, r, !!spec);
+  const useTmux = await tmuxOn();
+  if (useTmux) {
+    // On means tmux: a missing binary is an error (thrown by tmuxSpec), not a fall back to a plain shell.
+    // On a remote host that is checked there first, so the reason reaches the panel.
+    if (remote) await remotePreflight(remote, true);
+    id = tmuxName(key, n);
+    spec = remote ? remoteSpec(remote, id, key, true) : tmuxSpec(id, key, true);
+  } else if (remote) {
+    await remotePreflight(remote, false);
+    spec = remoteSpec(remote, null, key, false);
+  }
+  const s = newSession(id, cwd || (remote ? remote.path : ""), key, c, r, useTmux, remote);
   sessions.set(id, s);
   startRelay(s, c, r, spec);
-  return { id, cwd, key, gen: 0, tmux: !!spec };
+  return { id, cwd: s.cwd, key, gen: 0, tmux: useTmux, remote: remote ? remote.target.label : "" };
 }
 
 function need(id) {
@@ -498,7 +845,10 @@ function closeSession(id, kill) {
   const s = sessions.get(id);
   if (!s) return;
   sessions.delete(id);
-  if (s.tmux && kill) tmuxRun(["kill-session", "-t", "=" + s.id]).catch(() => {});
+  if (s.tmux && kill) {
+    const args = ["kill-session", "-t", "=" + s.id];
+    (s.remote ? remoteTmuxRun(s.remote.target, args) : tmuxRun(args)).catch(() => {});
+  }
   stopRelay(s);
   wakeAll(s);
 }
@@ -757,7 +1107,7 @@ async function onPanelInvoke(channel, p) {
         // The screen lives in tmux, not in our ring: start a fresh client and let tmux repaint it.
         // -d on the attach also detaches the previous client, so the window follows this panel's size.
         const cols = clampDim(p.cols, s.cols), rows = clampDim(p.rows, s.rows);
-        startRelay(s, cols, rows, tmuxSpec(s.id, "", false));
+        startRelay(s, cols, rows, s.remote ? remoteSpec(s.remote, s.id, "", false) : tmuxSpec(s.id, "", false));
         s.lastPollAt = Date.now();
         return { replay: "", gen: s.gen, nextSeq: s.ring.nextSeq, tmux: true };
       }

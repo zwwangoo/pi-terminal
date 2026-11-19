@@ -2,7 +2,8 @@ import os, sys, pty, select, fcntl, termios, struct, signal, pwd, json, subproce
 
 # argv: cwd cols rows [spec].  fd0 = keyboard bytes in, fd1 = pty bytes out, fd3 = control lines ("R cols rows").
 # spec is an optional JSON object {"tmux": bin, "sock": socket, "name": session, "key": project key,
-# "create": bool}. Without it the relay runs a login shell directly on the pty (the default mode).
+# "create": bool}, or {"exec": [argv...]} (run that command instead, used for ssh). Without it the relay
+# runs a login shell directly on the pty (the default mode).
 cwd = sys.argv[1] if len(sys.argv) > 1 else ""
 cols = int(sys.argv[2]) if len(sys.argv) > 2 else 80
 rows = int(sys.argv[3]) if len(sys.argv) > 3 else 24
@@ -51,7 +52,10 @@ shell = env["SHELL"]
 startdir = cwd if cwd and os.path.isdir(cwd) else pw.pw_dir
 
 argv = [shell, "-l"]
-if spec:
+if spec and spec.get("exec"):
+    # Remote mode: the plugin built the whole command (ssh ... ), the relay only puts it on a pty.
+    argv = [str(a) for a in spec["exec"]]
+elif spec:
     # -u: treat the terminal as UTF-8 whatever the locale says, or tmux swaps non-ASCII text for "_".
     base_cmd = [spec["tmux"], "-u", "-L", spec["sock"]]
 

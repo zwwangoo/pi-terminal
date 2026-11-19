@@ -40,8 +40,8 @@
   var ZH = /^zh/i.test((navigator.language || "") + "");
   // Panel copy: one table per language with the same keys. Values go in through textContent / setAttribute only.
   var I18N = {
-    en: { copy: "Copy", paste: "Paste", pasteLine: "Paste as Single Line", pasteRaw: "Paste with Line Breaks", selectAll: "Select All", clear: "Clear Scrollback", newTab: "New Tab", closeTab: "Close Tab", openLink: "Open Link", copyLink: "Copy Link Address", linkHint: "Hold \u2318 and click to open the link", copyFail: "Cannot copy: ", pasteFail: "Cannot paste: ", openFail: "Cannot open ", saveFail: "Cannot save font size: ", noBridge: "pluginBridge unavailable", startFail: "Failed to start terminal: ", exited: "process exited", dropped: "output dropped: this panel fell too far behind to keep it", superseded: "this terminal is now attached to another panel", backendLost: "terminal backend lost: ", newTabAria: "New terminal", newTabTip: "New terminal (\u2318T)", tmuxTip: "Runs inside tmux, session: ", detached: "detached from tmux, the session keeps running. Press Enter to reattach (the \u00d7 on the tab ends it)", reattachFail: "Cannot reattach: ", selHintMac: "Hold \u2325 to select text", selHintOther: "Hold Shift to select text" },
-    "zh-CN": { copy: "\u590d\u5236", paste: "\u7c98\u8d34", pasteLine: "\u7c98\u8d34\u4e3a\u5355\u884c", pasteRaw: "\u7c98\u8d34\uff08\u4fdd\u7559\u6362\u884c\uff09", selectAll: "\u5168\u9009", clear: "\u6e05\u9664\u6eda\u52a8\u7f13\u51b2", newTab: "\u65b0\u5efa\u6807\u7b7e", closeTab: "\u5173\u95ed\u6807\u7b7e", openLink: "\u6253\u5f00\u94fe\u63a5", copyLink: "\u590d\u5236\u94fe\u63a5\u5730\u5740", linkHint: "\u6309\u4f4f \u2318 \u70b9\u51fb\u94fe\u63a5\u624d\u4f1a\u6253\u5f00", copyFail: "\u65e0\u6cd5\u590d\u5236: ", pasteFail: "\u65e0\u6cd5\u7c98\u8d34: ", openFail: "\u65e0\u6cd5\u6253\u5f00 ", saveFail: "\u65e0\u6cd5\u4fdd\u5b58\u5b57\u4f53\u5927\u5c0f: ", noBridge: "\u63d2\u4ef6\u6865\u63a5\u4e0d\u53ef\u7528", startFail: "\u542f\u52a8\u7ec8\u7aef\u5931\u8d25: ", exited: "\u8fdb\u7a0b\u5df2\u9000\u51fa", dropped: "\u8f93\u51fa\u5df2\u4e22\u5f03\uff1a\u9762\u677f\u843d\u540e\u592a\u591a\uff0c\u65e0\u6cd5\u4fdd\u7559", superseded: "\u6b64\u7ec8\u7aef\u5df2\u8fde\u63a5\u5230\u53e6\u4e00\u4e2a\u9762\u677f", backendLost: "\u7ec8\u7aef\u540e\u7aef\u5df2\u65ad\u5f00: ", newTabAria: "\u65b0\u5efa\u7ec8\u7aef", newTabTip: "\u65b0\u5efa\u7ec8\u7aef\uff08\u2318T\uff09", tmuxTip: "\u8fd0\u884c\u5728 tmux \u4e2d\uff0c\u4f1a\u8bdd\uff1a", detached: "\u5df2\u4ece tmux \u8131\u79bb\uff0c\u4f1a\u8bdd\u4ecd\u5728\u540e\u53f0\u8fd0\u884c\u3002\u6309\u56de\u8f66\u91cd\u65b0\u63a5\u5165\uff08\u6807\u7b7e\u4e0a\u7684 \u00d7 \u4f1a\u7ed3\u675f\u5b83\uff09", reattachFail: "\u65e0\u6cd5\u91cd\u65b0\u63a5\u5165: ", selHintMac: "\u6309\u4f4f \u2325 \u62d6\u9009\u6587\u5b57", selHintOther: "\u6309\u4f4f Shift \u62d6\u9009\u6587\u5b57" },
+    en: { copy: "Copy", paste: "Paste", pasteLine: "Paste as Single Line", pasteRaw: "Paste with Line Breaks", selectAll: "Select All", clear: "Clear Scrollback", newTab: "New Tab", closeTab: "Close Tab", openLink: "Open Link", copyLink: "Copy Link Address", linkHint: "Hold \u2318 and click to open the link", copyFail: "Cannot copy: ", pasteFail: "Cannot paste: ", openFail: "Cannot open ", saveFail: "Cannot save font size: ", noBridge: "pluginBridge unavailable", startFail: "Failed to start terminal: ", exited: "process exited", dropped: "output dropped: this panel fell too far behind to keep it", superseded: "this terminal is now attached to another panel", backendLost: "terminal backend lost: ", newTabAria: "New terminal", newTabTip: "New terminal (\u2318T)", tmuxTip: "Runs inside tmux, session: ", remoteTip: "Remote host: ", detached: "detached from tmux, the session keeps running. Press Enter to reattach (the \u00d7 on the tab ends it)", reattachFail: "Cannot reattach: ", selHintMac: "Hold \u2325 to select text", selHintOther: "Hold Shift to select text" },
+    "zh-CN": { copy: "\u590d\u5236", paste: "\u7c98\u8d34", pasteLine: "\u7c98\u8d34\u4e3a\u5355\u884c", pasteRaw: "\u7c98\u8d34\uff08\u4fdd\u7559\u6362\u884c\uff09", selectAll: "\u5168\u9009", clear: "\u6e05\u9664\u6eda\u52a8\u7f13\u51b2", newTab: "\u65b0\u5efa\u6807\u7b7e", closeTab: "\u5173\u95ed\u6807\u7b7e", openLink: "\u6253\u5f00\u94fe\u63a5", copyLink: "\u590d\u5236\u94fe\u63a5\u5730\u5740", linkHint: "\u6309\u4f4f \u2318 \u70b9\u51fb\u94fe\u63a5\u624d\u4f1a\u6253\u5f00", copyFail: "\u65e0\u6cd5\u590d\u5236: ", pasteFail: "\u65e0\u6cd5\u7c98\u8d34: ", openFail: "\u65e0\u6cd5\u6253\u5f00 ", saveFail: "\u65e0\u6cd5\u4fdd\u5b58\u5b57\u4f53\u5927\u5c0f: ", noBridge: "\u63d2\u4ef6\u6865\u63a5\u4e0d\u53ef\u7528", startFail: "\u542f\u52a8\u7ec8\u7aef\u5931\u8d25: ", exited: "\u8fdb\u7a0b\u5df2\u9000\u51fa", dropped: "\u8f93\u51fa\u5df2\u4e22\u5f03\uff1a\u9762\u677f\u843d\u540e\u592a\u591a\uff0c\u65e0\u6cd5\u4fdd\u7559", superseded: "\u6b64\u7ec8\u7aef\u5df2\u8fde\u63a5\u5230\u53e6\u4e00\u4e2a\u9762\u677f", backendLost: "\u7ec8\u7aef\u540e\u7aef\u5df2\u65ad\u5f00: ", newTabAria: "\u65b0\u5efa\u7ec8\u7aef", newTabTip: "\u65b0\u5efa\u7ec8\u7aef\uff08\u2318T\uff09", tmuxTip: "\u8fd0\u884c\u5728 tmux \u4e2d\uff0c\u4f1a\u8bdd\uff1a", remoteTip: "\u8fdc\u7a0b\u4e3b\u673a\uff1a", detached: "\u5df2\u4ece tmux \u8131\u79bb\uff0c\u4f1a\u8bdd\u4ecd\u5728\u540e\u53f0\u8fd0\u884c\u3002\u6309\u56de\u8f66\u91cd\u65b0\u63a5\u5165\uff08\u6807\u7b7e\u4e0a\u7684 \u00d7 \u4f1a\u7ed3\u675f\u5b83\uff09", reattachFail: "\u65e0\u6cd5\u91cd\u65b0\u63a5\u5165: ", selHintMac: "\u6309\u4f4f \u2325 \u62d6\u9009\u6587\u5b57", selHintOther: "\u6309\u4f4f Shift \u62d6\u9009\u6587\u5b57" },
   };
   var L = ZH ? I18N["zh-CN"] : I18N.en;
   function errText(e) { return (e && e.message) || e || "unknown error"; }
@@ -202,12 +202,14 @@
   function updateMode() {
     var m = document.getElementById("mode");
     if (!active) { m.textContent = ""; return; }
-    m.textContent = active.tmux ? "tmux" : "shell";
-    m.className = "mode" + (active.tmux ? " tmux" : "");
-    m.title = active.tmux ? L.tmuxTip + active.id : "";
+    // On a remote host the badge names it: which machine a command lands on must be visible.
+    var kind = active.tmux ? "tmux" : "shell";
+    m.textContent = active.remote ? active.remote + " \u00b7 " + kind : kind;
+    m.className = "mode" + (active.tmux ? " tmux" : "") + (active.remote ? " remote" : "");
+    m.title = (active.remote ? L.remoteTip + active.remote + (active.tmux ? "; " : "") : "") + (active.tmux ? L.tmuxTip + active.id : "");
   }
 
-  function makeTab(id, replayB64, gen, nextSeq, isTmux) {
+  function makeTab(id, replayB64, gen, nextSeq, isTmux, remote) {
     var el = document.createElement("div");
     el.className = "term";
     hostEl.appendChild(el);
@@ -261,6 +263,13 @@
     var x = document.createElement("span");
     x.className = "x";
     x.textContent = "\u00d7";
+    if (remote) {
+      var rtag = document.createElement("span");
+      rtag.className = "tag remote";
+      rtag.textContent = remote;
+      rtag.title = L.remoteTip + remote;
+      btn.appendChild(rtag);
+    }
     if (isTmux) {
       var tag = document.createElement("span");
       tag.className = "tag";
@@ -272,7 +281,7 @@
     btn.appendChild(x);
     tabsEl.insertBefore(btn, document.getElementById("add"));
 
-    var t = { id: id, tmux: !!isTmux, gen: gen | 0, nextSeq: nextSeq | 0, term: term, fit: fit, el: el, btn: btn, alive: true, pending: "", sending: false, link: "" };
+    var t = { id: id, tmux: !!isTmux, remote: remote || "", gen: gen | 0, nextSeq: nextSeq | 0, term: term, fit: fit, el: el, btn: btn, alive: true, pending: "", sending: false, link: "" };
     tabs.push(t);
     btn.addEventListener("click", function (ev) {
       if (ev.target === x) closeTab(t); else activate(t);
@@ -420,7 +429,7 @@
     var size = estimateSize();
     try {
       var r = await invoke("term.open", { cols: size.cols, rows: size.rows, key: curKey });
-      var t = makeTab(r.id, null, r.gen, r.nextSeq, r.tmux);
+      var t = makeTab(r.id, null, r.gen, r.nextSeq, r.tmux, r.remote);
       activate(t);
       await new Promise(function (res) { requestAnimationFrame(res); });
       refit(t);
@@ -523,7 +532,7 @@
       try {
         var size = estimateSize();
         var a = await invoke("term.attach", { id: id, cols: size.cols, rows: size.rows });
-        var t2 = makeTab(id, a.replay, a.gen, a.nextSeq, live[id].tmux);
+        var t2 = makeTab(id, a.replay, a.gen, a.nextSeq, live[id].tmux, live[id].remote);
         pollLoop(t2);
       } catch (e) {}
     }

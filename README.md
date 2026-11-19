@@ -1,6 +1,6 @@
 # Terminal (local.terminal)
 
-PI-Desktop 工作面板里的内嵌终端：xterm.js 前端 + python3 PTY relay，在当前工作区打开登录 shell（`$SHELL -l`）。需要 PATH 里有 python3（macOS 自带）。
+PI-Desktop 工作面板里的内嵌终端：xterm.js 前端 + python3 PTY relay，在当前工作区打开登录 shell（`$SHELL -l`）；远程项目则通过 ssh 在远程主机的项目目录里打开。需要 PATH 里有 python3（macOS 自带）。远程项目另需本机有 `ssh` 和 `sqlite3`（macOS 自带）。
 
 ## 目录
 
@@ -15,6 +15,7 @@ test/ring-buffer.js      环形缓冲单测
 test/shortcut.js         ⌘T 命令：注册、唤起视图、被拒时不抛错
 test/e2e.js              离线端到端（mock pi，直连 onPanelInvoke，会起真实 shell）
 test/tmux.js             tmux 模式（独立 socket）：重载后接回、项目隔离、前缀键脱离、关标签 kill、缺 tmux 时的行为
+test/remote.js           远程项目：用假 ssh 在本机执行远端命令，覆盖主机解析、命令构造与引用、各类报错、远程 tmux
 test/harness.js          HTTP 假桥接，可在浏览器里预览面板
 dist/                    构建产物（不入库）
 ```
@@ -36,12 +37,13 @@ npm test
 - **面板快捷键**：⌘C 仅在有选区时复制（Ctrl+C 始终是中断）、⌘V 粘贴（bracketed paste）、⌘A 全选、⌘K 清除滚动缓冲、⌘+ / ⌘- / ⌘0 缩放字体（只认 ⌘，Ctrl+- 留给 readline）、⌘T / ⌘W 新建 / 关闭标签；非 mac 用 Ctrl+Shift+C / V。
 - **右键菜单**：复制、粘贴、粘贴为单行（换行折成空格，防止多行命令直接执行）、全选、清除滚动缓冲、新建 / 关闭标签；悬停在 http(s) 链接上时多出「打开链接 / 复制链接地址」。支持键盘导航，跟随宿主明暗主题与语言。
 - **链接**：点击终端里的 http(s) 链接，经宿主 `shell.openExternal` 用默认浏览器打开；失败原因写到状态行。
+- **远程项目**（0.5.0）：项目在远程主机上（路径形如 `remote-project:<id>`）时，终端在该主机的项目目录里打开，由本机 `ssh` 连过去，不会退回本地 shell。右上角角标和标签上的橙色小标签显示主机名，一眼看出命令落在哪台机器上。主机以项目自己的绑定为准（只读查询 `~/.pi-desktop/pi.sqlite` 里的 `projectGroups` 记录）；只有读不到绑定时才用设置项 `remoteHost`（填主机名称或 hostKey，必须是以 SSH 方式添加的主机）补位，它不会覆盖绑定。没有绑定也没有设置时不去猜（即使只有一台主机带 SSH 信息），直接在新建标签时报错并列出可选主机，免得命令落到别的机器上。打开标签前先做一次预检（一次 ssh）：主机连不上、tmux 标签但远端没有 tmux、项目目录进不去，都会作为错误显示在面板上，不会留下一个马上退出的标签。SSH 的地址、端口、用户、密钥文件取自 `~/.pi-desktop/remote-hosts.json`，认证用你自己的密钥文件或 ssh-agent，`BatchMode`，不会询问口令；不是以 SSH 方式添加的主机（没有 SSH 信息）连不上，会明确报错。开启 `tmuxMode` 时，tmux 跑在远程主机上（同样是私有 socket `pi-terminal`），断线、重载插件、重启宿主后会话仍在，下次打开自动接回；关标签结束的是远程那个会话，「结束所有 tmux 后台会话」也会清理当前项目所在主机（以及本次运行中用过的主机）上的会话：这会结束那台主机上插件私有 socket 里的所有会话，包括你另一台电脑在同一主机上开的。关标签时发给远端的 `kill-session` 是尽力而为，网络断着时远端会留下会话，下次发现时会重新出现，可用这个命令清掉。远程主机需要有 tmux，没有时终端里会提示。目录名含单引号或反斜杠会被拒绝（远端命令行要同时兼容 sh 和 fish）。
 - **输入法自动切换**（仅 macOS，默认关闭，需 `brew install im-select`）：点进终端时切到英文（`imeTarget`），离开时切回原输入源；如果离开时你已手动换成别的输入源，则不覆盖。
 - **tmux 持久会话**（`tmuxMode`，默认关闭，需要已安装 tmux）：开启这个开关后，每个标签是插件专用 tmux 服务（`tmux -L pi-terminal`）里的一个会话，会加载你自己的 `~/.tmux.conf`（或 `~/.config/tmux/tmux.conf`），两者都没有时才用插件自带的最小配置。关掉面板、重载或卸载插件、重启宿主，shell 和里面跑的程序都还在，下次打开同一个对话会话会自动接回；关闭标签、`exit` 才真正结束。开关关闭时已经开着的普通 shell 标签不会被改成 tmux，也不会被杀：开启开关后重开面板，该会话没有 tmux 标签就会自动新建一个并切过去，旧的 shell 标签留着，用完自己关。哪个标签在 tmux 里一眼可见：多标签时 tmux 标签带青色 `tmux` 小标签，只有一个标签时右上角常驻 `tmux` / `shell` 角标，悬停显示会话名。命令面板里的「结束所有 tmux 后台会话」（`local.terminal.killTmux`）会一次清掉所有遗留会话，不受开关当前状态影响。
 
 ### 设置
 
-设置弹窗里的项：`openShortcut`、`linkNeedsModifier`（按住 ⌘/Ctrl 才打开链接）、`pasteSingleLine`（⌘V 与右键「粘贴」默认折成单行）、`imeAutoSwitch`、`tmuxMode`（开关，默认关闭；开启时必须装了 tmux，找不到会在新建标签时报错，不会悄悄退回普通 shell）。
+设置弹窗里的项：`openShortcut`、`remoteHost`（远程项目用哪台主机，留空即自动识别）、`linkNeedsModifier`（按住 ⌘/Ctrl 才打开链接）、`pasteSingleLine`（⌘V 与右键「粘贴」默认折成单行）、`imeAutoSwitch`、`tmuxMode`（开关，默认关闭；开启时必须装了 tmux，找不到会在新建标签时报错，不会悄悄退回普通 shell）。
 
 以下三项没有放进弹窗（宿主的文本框比开关高很多，排版参差，manifest 又不能调样式），需手改 `~/.pi-desktop/plugins/data/local.terminal/settings.json`（不存在就新建一个 JSON 对象）：
 
@@ -57,6 +59,7 @@ npm test
 - **缓冲与背压**：每会话保留 1 MiB，裁剪只丢整块。有面板在读且落后超过 512 KiB 时暂停 pty，追到 128 KiB 以下恢复；5 秒内没人轮询（面板关了、切到别的项目）就不暂停，改为丢最旧的块，后台 shell 不会被冻结。只有面板停顿后接着读、中间那段已被丢掉时，`poll` 才返回 `truncated`，面板打出 `[output dropped…]`。
 - **设置读取**：面板通过 `term.settings` 取值（每 2 秒，以及聚焦、可见性变化时），`term.saveFont` 写回字号（防抖 0.6 秒）。后端与输入法共用一份缓存：有宿主推送事件就只读一次，没有就按 3 秒 TTL 重读。插件自己 `setSettings` 不会触发推送，所以保存字号时自己更新缓存，失败则还原。清洗规则：字号取整并限幅，非正数 / 非数字用默认值；字体名去掉 `; { } < > \` 和换行、限 200 字符，用 `CSS.supports` 校验，不合法时逐级降级到内置字体栈；开关只认 `true`。
 - **输入法**：面板监听 focus / blur / visibilitychange / pagehide，另每 500 ms 用 `document.hasFocus()` 对账（宿主切页签时不保证发 blur）。每个面板文档带 `client` id，后端只认最后一次上报聚焦的文档发来的失焦。插件进程把焦点变化排成串行队列，按「想要英文」「已经切过」两个状态收敛，重复事件不会重复调用 im-select；切换失败时保留记住的原输入源，下一次焦点变化或 `onUnload` 时重试。im-select 从 `/opt/homebrew/bin` 等路径自动探测，找不到的结果缓存 5 秒；测试时可用环境变量 `PI_TERMINAL_IM_SELECT` 指定路径。
+- **远程后端**：relay 的 spec 多一种 `{"exec": [argv...]}`，relay 只负责把这条命令放进本地 pty 里运行，其余读写、窗口大小、背压都不变。命令是 `ssh -tt -o BatchMode=yes … user@host "<远端命令>"`，远端命令是 `sh -c '<脚本>' sh <参数…>`：所有可变值（目录、socket、会话名、key）都作为位置参数传入并放进单引号，脚本里不含单引号和反斜杠，所以远端登录 shell 是 bash、zsh 还是 fish 都解析得一样。远端先补全 PATH（Homebrew 目录），再 `cd "$1" && exec "${SHELL:-/bin/sh}" -l`。远程 tmux 的脚本与本地的 `relay.py` 逻辑一致：会话不存在才创建（没有用户 tmux 配置时才应用最小配置）、打上 `@pi_key` 标记、`attach-session -d`。远程的 `has-session` / `list-sessions` / `kill-session` / `kill-server` 走无 pty 的 `ssh -T`；`has-session` 只有 tmux 自己回答才算数（1：会话没了，127：主机上没有 tmux），ssh 失败（255）或超时按“还活着”处理，断网不会把还在跑的标签关掉。会话发现每个主机只做一次，并发的 `term.list` 共用同一次 ssh；`term.list` 最多等它 3 秒，主机不通时不会拖住面板，找到的会话在之后的列表里出现；失败后 30 秒才重试。接回已有会话时不使用记录的目录，所以目录名带引号的会话也能接回。测试可用 `PI_TERMINAL_SSH` 指定 ssh、`PI_TERMINAL_DATA_DIR` 指定数据目录、`PI_TERMINAL_SQLITE` 指定 sqlite3。
 - **tmux 后端**：relay 多接一个可选的 JSON 参数。有参数时它先在私有 socket（`tmux -L pi-terminal`，由 tmux 自己加载用户的 `~/.tmux.conf`；私有服务是第一次建会话时才启动的，之后改了配置文件需 `source-file` 或结束所有 tmux 后台会话后重开才生效）上确保会话存在（没有就 `new-session -d`），若用户没有 tmux 配置文件，再通过标准输入灌入 `relay.py` 里写死的最小配置（`status off`、`mouse on`、`history-limit 20000`、`escape-time 10`、`focus-events`、`set-clipboard on`、truecolor），最后 `attach-session -d` 到会话上；没有参数就和以前一样直接起登录 shell。会话名是 `pit_<项目哈希>_<时间戳>`，项目的精确 key 存在会话的 `@pi_key` 上。tmux 会话的 `term.attach` 不回放环形缓冲，而是重新起一个 relay 客户端让 tmux 整屏重绘（旧客户端被 `-d` 顶掉）；`term.list` 里的 `exited` 对 tmux 会话表示“会话已不存在”，只是客户端退出（前缀键脱离）不算。关标签（`term.close`）会 `kill-session`，卸载插件只脱离客户端。`term.list` 在开关开着时第一次被调用（以及开关从关到开后）用 `list-sessions` 把遗留的会话重新登记，第一次 attach 时才起 relay。`term.list` 还返回 `tmuxWanted`，面板据此在项目只有普通 shell 时补开一个 tmux 标签。测试可用 `PI_TERMINAL_TMUX` 指定 tmux 路径、`PI_TERMINAL_TMUX_SOCK` 指定 socket 名、`PI_TERMINAL_TMUX_HOME` 指定 HOME（避免读到真实的 `~/.tmux.conf`），以免碰到真实会话。
 
 ## 已知限制
